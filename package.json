@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "package:lambda": "rm -rf dist && mkdir -p dist && npm install --production --prefix dist && npx tsc -p . --outDir dist && (cd dist && zip -r lambda.zip .)",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
