@@ -4,3 +4,9 @@ dist/
 *.log
 *.tsbuildinfo
 .DS_Store
+
+# ignore compiled artifacts that may end up in src
+/src/**/*.js
+/src/**/*.js.map
+/src/**/*.d.ts
+/src/**/*.d.ts.map
