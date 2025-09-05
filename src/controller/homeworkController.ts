@@ -6,18 +6,52 @@ export async function create(req: Request, res: Response) {
   const id = uuidv4();
   const payload = req.body;
   const now = new Date().toISOString();
-  const item = {
+  // determine is_team: prefer explicit flag, otherwise infer from payload
+  let is_team: boolean | undefined = payload.is_team;
+  if (typeof is_team === "undefined") {
+    if (payload.person_name) is_team = false;
+    else if (Array.isArray(payload.members) && payload.members.length > 0)
+      is_team = true;
+    else is_team = true; // default to team if ambiguous
+  }
+
+  const item: any = {
     id,
-    group_name: payload.group_name,
+    is_team,
+    group_name: is_team ? payload.group_name : undefined,
+    person_name: !is_team ? payload.person_name : undefined,
     school_name: payload.school_name,
-    members: payload.members || [],
+    members: is_team ? payload.members || [] : undefined,
     images: payload.images || [],
     videos: payload.videos || [],
     urls: payload.urls || [],
     created_at: now,
   };
-  const r = await hw.createHomework(item);
-  res.status(201).json(r);
+
+  // basic request-level validation
+  if (item.is_team) {
+    if (!item.group_name)
+      return res
+        .status(400)
+        .json({ error: "group_name required for team homework" });
+    if (!Array.isArray(item.members) || item.members.length === 0)
+      return res
+        .status(400)
+        .json({ error: "members array required for team homework" });
+  } else {
+    if (!item.person_name)
+      return res
+        .status(400)
+        .json({ error: "person_name required for personal homework" });
+  }
+
+  try {
+    const r = await hw.createHomework(item);
+    res.status(201).json(r);
+  } catch (err: any) {
+    // model validation errors -> 400
+    return res.status(400).json({ error: err.message || String(err) });
+  }
 }
 
 export async function getOne(req: Request, res: Response) {

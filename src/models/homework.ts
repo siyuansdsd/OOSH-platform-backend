@@ -1,82 +1,219 @@
-import pool from "./db.js";
+import AWS from "aws-sdk";
 
 export type Homework = {
   id: string; // uuid
-  group_name: string;
+  // is_team: true => team homework (requires group_name + members)
+  // is_team: false => personal homework (requires person_name)
+  is_team: boolean;
+  group_name?: string;
+  person_name?: string;
   school_name: string;
-  members: string[];
-  images: string[];
-  videos: string[];
-  urls: string[];
+  members?: string[];
+  images?: string[];
+  videos?: string[];
+  urls?: string[];
   created_at: string;
 };
 
+const ddb = new AWS.DynamoDB.DocumentClient({
+  region: process.env.AWS_REGION || "ap-southeast-2",
+});
+const TABLE = process.env.DYNAMO_TABLE || "homeworks";
+
 export async function initTable() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS homeworks (
-      id TEXT PRIMARY KEY,
-      group_name TEXT NOT NULL,
-      school_name TEXT NOT NULL,
-      members TEXT[] NOT NULL,
-      images TEXT[] DEFAULT '{}',
-      videos TEXT[] DEFAULT '{}',
-      urls TEXT[] DEFAULT '{}',
-      created_at TIMESTAMP WITH TIME ZONE NOT NULL
-    )
-  `);
+  // DynamoDB table creation requires admin permissions; if table exists do nothing.
+  // We don't create the table programmatically here to avoid permission issues; return quickly.
+  return;
+}
+
+function validateRequiredFields(h: Partial<Homework>) {
+  const missing: string[] = [];
+  if (!h.id) missing.push("id");
+  if (h.is_team === undefined) missing.push("is_team");
+  if (!h.school_name) missing.push("school_name");
+  // conditional: team requires group_name + members; personal requires person_name
+  if (h.is_team) {
+    if (!h.group_name) missing.push("group_name");
+    if (!h.members) missing.push("members");
+  } else {
+    if (!h.person_name) missing.push("person_name");
+  }
+  if (!h.created_at) missing.push("created_at");
+  if (missing.length) {
+    throw new Error(`Missing required fields: ${missing.join(", ")}`);
+  }
+  if (h.is_team && !Array.isArray(h.members)) {
+    throw new Error("members must be an array of strings");
+  }
+  // validate optional media fields: if present they must be arrays
+  if ((h as any).images !== undefined && !Array.isArray((h as any).images)) {
+    throw new Error("images must be an array of strings");
+  }
+  if ((h as any).videos !== undefined && !Array.isArray((h as any).videos)) {
+    throw new Error("videos must be an array of strings");
+  }
+  if ((h as any).urls !== undefined && !Array.isArray((h as any).urls)) {
+    throw new Error("urls must be an array of strings");
+  }
+
+  // ensure at least one of images, videos, urls is present and non-empty
+  const hasImages =
+    Array.isArray((h as any).images) && (h as any).images.length > 0;
+  const hasVideos =
+    Array.isArray((h as any).videos) && (h as any).videos.length > 0;
+  const hasUrls = Array.isArray((h as any).urls) && (h as any).urls.length > 0;
+  if (!hasImages && !hasVideos && !hasUrls) {
+    throw new Error("At least one of images, videos or urls must be provided");
+  }
 }
 
 export async function createHomework(h: Homework) {
-  const res = await pool.query(
-    `INSERT INTO homeworks(id, group_name, school_name, members, images, videos, urls, created_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8)
-     RETURNING *`,
-    [
-      h.id,
-      h.group_name,
-      h.school_name,
-      h.members,
-      h.images,
-      h.videos,
-      h.urls,
-      h.created_at,
-    ]
-  );
-  return res.rows[0];
+  const item = { ...h } as any;
+  // validate required fields (images/videos/urls are optional)
+  validateRequiredFields(item);
+
+  // construct PK/SK and stable index fields
+  item.PK = `HOMEWORK#${item.id}`;
+  item.SK = `META#${item.created_at}`;
+  if (!item.school_id) item.school_id = item.school_name;
+  if (Array.isArray(item.images) && item.images.length > 0)
+    item.preview = item.images[0];
+
+  // set attributes for sparse GSIs
+  item.entityType = "HOMEWORK";
+  if (Array.isArray(item.images) && item.images.length > 0)
+    item.has_images = "1";
+  if (Array.isArray(item.videos) && item.videos.length > 0)
+    item.has_videos = "1";
+  if (Array.isArray(item.urls) && item.urls.length > 0) item.has_urls = "1";
+
+  // write main item
+  await ddb.put({ TableName: TABLE, Item: item }).promise();
+  return item;
 }
 
 export async function getHomework(id: string) {
-  const r = await pool.query("SELECT * FROM homeworks WHERE id=$1", [id]);
-  return r.rows[0];
+  const pk = `HOMEWORK#${id}`;
+  const r = await ddb
+    .query({
+      TableName: TABLE,
+      KeyConditionExpression: "PK = :p and begins_with(SK, :s)",
+      ExpressionAttributeValues: { ":p": pk, ":s": "META#" },
+      Limit: 1,
+    })
+    .promise();
+  return (r.Items && r.Items[0]) || null;
 }
 
 export async function listHomeworks(limit = 100) {
-  const r = await pool.query(
-    "SELECT * FROM homeworks ORDER BY created_at DESC LIMIT $1",
-    [limit]
-  );
-  return r.rows;
+  // prefer the AllHomeworksIndex which lists by created_at
+  return listAllHomeworks(limit);
 }
 
 export async function updateHomework(id: string, patch: Partial<Homework>) {
   const existing = await getHomework(id);
   if (!existing) return null;
-  const merged = { ...existing, ...patch } as any;
-  const r = await pool.query(
-    `UPDATE homeworks SET group_name=$1, school_name=$2, members=$3, images=$4, videos=$5, urls=$6 WHERE id=$7 RETURNING *`,
-    [
-      merged.group_name,
-      merged.school_name,
-      merged.members,
-      merged.images,
-      merged.videos,
-      merged.urls,
-      id,
-    ]
-  );
-  return r.rows[0];
+  const updated = { ...existing, ...patch } as any;
+  // ensure required fields are still present after patch
+  try {
+    validateRequiredFields(updated);
+  } catch (err) {
+    throw err;
+  }
+  // ensure PK/SK remain present
+  updated.PK = `HOMEWORK#${updated.id}`;
+  updated.SK = `META#${updated.created_at}`;
+  // maintain sparse GSI flags and preview
+  updated.entityType = "HOMEWORK";
+  if (Array.isArray(updated.images) && updated.images.length > 0)
+    updated.has_images = "1";
+  else delete updated.has_images;
+  if (Array.isArray(updated.videos) && updated.videos.length > 0)
+    updated.has_videos = "1";
+  else delete updated.has_videos;
+  if (Array.isArray(updated.urls) && updated.urls.length > 0)
+    updated.has_urls = "1";
+  else delete updated.has_urls;
+  updated.preview =
+    Array.isArray(updated.images) && updated.images.length > 0
+      ? updated.images[0]
+      : updated.preview;
+
+  // write updated main item
+  await ddb.put({ TableName: TABLE, Item: updated }).promise();
+
+  // no member mapping logic: team vs personal is handled by fields on the main item
+
+  return updated;
+}
+
+// Query helpers for GSIs / sparse indexes
+export async function listAllHomeworks(limit = 100) {
+  const r = await ddb
+    .query({
+      TableName: TABLE,
+      IndexName: "AllHomeworksIndex",
+      KeyConditionExpression: "entityType = :e",
+      ExpressionAttributeValues: { ":e": "HOMEWORK" },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+    .promise();
+  return r.Items || [];
+}
+
+export async function listHomeworksWithImages(limit = 100) {
+  const r = await ddb
+    .query({
+      TableName: TABLE,
+      IndexName: "HasImagesIndex",
+      KeyConditionExpression: "has_images = :h",
+      ExpressionAttributeValues: { ":h": "1" },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+    .promise();
+  return r.Items || [];
+}
+
+export async function listHomeworksWithVideos(limit = 100) {
+  const r = await ddb
+    .query({
+      TableName: TABLE,
+      IndexName: "HasVideosIndex",
+      KeyConditionExpression: "has_videos = :h",
+      ExpressionAttributeValues: { ":h": "1" },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+    .promise();
+  return r.Items || [];
+}
+
+export async function listHomeworksWithUrls(limit = 100) {
+  const r = await ddb
+    .query({
+      TableName: TABLE,
+      IndexName: "HasUrlsIndex",
+      KeyConditionExpression: "has_urls = :h",
+      ExpressionAttributeValues: { ":h": "1" },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+    .promise();
+  return r.Items || [];
 }
 
 export async function deleteHomework(id: string) {
-  await pool.query("DELETE FROM homeworks WHERE id=$1", [id]);
+  const existing = await getHomework(id);
+  if (!existing) return;
+
+  // delete member mapping items
+  // delete main item
+  await ddb
+    .delete({
+      TableName: TABLE,
+      Key: { PK: `HOMEWORK#${existing.id}`, SK: `META#${existing.created_at}` },
+    })
+    .promise();
 }
