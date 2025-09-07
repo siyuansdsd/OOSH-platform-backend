@@ -152,7 +152,7 @@ export async function listAllHomeworks(limit = 100) {
   const r = await ddb
     .query({
       TableName: TABLE,
-      IndexName: "AllHomeworksIndex",
+      IndexName: "homework_index",
       KeyConditionExpression: "entityType = :e",
       ExpressionAttributeValues: { ":e": "HOMEWORK" },
       ScanIndexForward: false,
@@ -166,7 +166,7 @@ export async function listHomeworksWithImages(limit = 100) {
   const r = await ddb
     .query({
       TableName: TABLE,
-      IndexName: "HasImagesIndex",
+      IndexName: "HasImageIndex",
       KeyConditionExpression: "has_images = :h",
       ExpressionAttributeValues: { ":h": "1" },
       ScanIndexForward: false,
@@ -197,6 +197,55 @@ export async function listHomeworksWithUrls(limit = 100) {
       IndexName: "HasUrlsIndex",
       KeyConditionExpression: "has_urls = :h",
       ExpressionAttributeValues: { ":h": "1" },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+    .promise();
+  return r.Items || [];
+}
+
+// List homeworks for a given person (personal homework).
+// This requires a GSI named 'person_index' where PK is person_name (or person_id) and SK is created_at.
+// For this to work, items for personal homeworks must include the attribute `person_name` (or `person_id`).
+export async function listHomeworksByPerson(person: string, limit = 100) {
+  const r = await ddb
+    .query({
+      TableName: TABLE,
+      IndexName: "person_index",
+      KeyConditionExpression: "person_name = :p",
+      ExpressionAttributeValues: { ":p": person },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+    .promise();
+  return r.Items || [];
+}
+
+// List homeworks for a given group/team (team homework).
+// Requires a GSI named 'group_index' where partition key is group_name (or group_id) and SK is created_at.
+export async function listHomeworksByGroup(group: string, limit = 100) {
+  const r = await ddb
+    .query({
+      TableName: TABLE,
+      IndexName: "group_index",
+      KeyConditionExpression: "group_name = :g",
+      ExpressionAttributeValues: { ":g": group },
+      ScanIndexForward: false,
+      Limit: limit,
+    })
+    .promise();
+  return r.Items || [];
+}
+
+// List homeworks for a given school, ordered by created_at desc.
+// Requires a GSI named 'school_index' where partition key is school_id (or school_name) and SK is created_at.
+export async function listHomeworksBySchool(school: string, limit = 100) {
+  const r = await ddb
+    .query({
+      TableName: TABLE,
+      IndexName: "school_index",
+      KeyConditionExpression: "school_id = :s",
+      ExpressionAttributeValues: { ":s": school },
       ScanIndexForward: false,
       Limit: limit,
     })
