@@ -26,7 +26,10 @@ export async function initTable() {
   return;
 }
 
-function validateRequiredFields(h: Partial<Homework>) {
+function validateRequiredFields(
+  h: Partial<Homework>,
+  opts: { requireMedia?: boolean } = { requireMedia: true }
+) {
   const missing: string[] = [];
   if (!h.id) missing.push("id");
   if (h.is_team === undefined) missing.push("is_team");
@@ -56,14 +59,19 @@ function validateRequiredFields(h: Partial<Homework>) {
     throw new Error("urls must be an array of strings");
   }
 
-  // ensure at least one of images, videos, urls is present and non-empty
-  const hasImages =
-    Array.isArray((h as any).images) && (h as any).images.length > 0;
-  const hasVideos =
-    Array.isArray((h as any).videos) && (h as any).videos.length > 0;
-  const hasUrls = Array.isArray((h as any).urls) && (h as any).urls.length > 0;
-  if (!hasImages && !hasVideos && !hasUrls) {
-    throw new Error("At least one of images, videos or urls must be provided");
+  // ensure at least one of images, videos, urls is present and non-empty when required
+  if (opts.requireMedia) {
+    const hasImages =
+      Array.isArray((h as any).images) && (h as any).images.length > 0;
+    const hasVideos =
+      Array.isArray((h as any).videos) && (h as any).videos.length > 0;
+    const hasUrls =
+      Array.isArray((h as any).urls) && (h as any).urls.length > 0;
+    if (!hasImages && !hasVideos && !hasUrls) {
+      throw new Error(
+        "At least one of images, videos or urls must be provided"
+      );
+    }
   }
 }
 
@@ -71,6 +79,33 @@ export async function createHomework(h: Homework) {
   const item = { ...h } as any;
   // validate required fields (images/videos/urls are optional)
   validateRequiredFields(item);
+
+  // construct PK/SK and stable index fields
+  item.PK = `HOMEWORK#${item.id}`;
+  item.SK = `META#${item.created_at}`;
+  if (!item.school_id) item.school_id = item.school_name;
+  if (Array.isArray(item.images) && item.images.length > 0)
+    item.preview = item.images[0];
+
+  // set attributes for sparse GSIs
+  item.entityType = "HOMEWORK";
+  if (Array.isArray(item.images) && item.images.length > 0)
+    item.has_images = "1";
+  if (Array.isArray(item.videos) && item.videos.length > 0)
+    item.has_videos = "1";
+  if (Array.isArray(item.urls) && item.urls.length > 0) item.has_urls = "1";
+
+  // write main item
+  await ddb.put({ TableName: TABLE, Item: item }).promise();
+  return item;
+}
+
+// Create a homework draft which skips the media presence requirement.
+// Useful when you want to create the homework record first, then upload files and update.
+export async function createHomeworkDraft(h: Homework) {
+  const item = { ...h } as any;
+  // validate required fields but allow empty media
+  validateRequiredFields(item, { requireMedia: false });
 
   // construct PK/SK and stable index fields
   item.PK = `HOMEWORK#${item.id}`;

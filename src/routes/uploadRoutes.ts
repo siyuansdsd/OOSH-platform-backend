@@ -12,6 +12,13 @@ const upload = multer({
 });
 
 router.post("/presign", presignHandler);
+// create draft homework + presign for client-side upload
+router.post("/create-and-presign", async (req, res) => {
+  const { createDraftAndPresign } = await import(
+    "../controller/uploadController.js"
+  );
+  return createDraftAndPresign(req, res);
+});
 // server-side upload with compression
 router.post("/upload", upload.single("file"), uploadHandler);
 

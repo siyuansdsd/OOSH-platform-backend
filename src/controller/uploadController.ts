@@ -69,6 +69,69 @@ export async function presignHandler(req: Request, res: Response) {
   }
 }
 
+// Create a homework draft (server-generated id) and return a presigned URL for uploading a file
+export async function createDraftAndPresign(req: Request, res: Response) {
+  const payload = req.body || {};
+  // fields used to create the draft homeworks
+  const {
+    filename,
+    contentType,
+    schoolName,
+    groupName,
+    is_team,
+    person_name,
+    members,
+  } = payload;
+  if (!filename) return res.status(400).json({ error: "filename required" });
+  if (!BUCKET)
+    return res.status(500).json({ error: "S3_BUCKET not configured" });
+
+  // create homework draft
+  const { v4: uuidv4 } = await import("uuid");
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  const homework: any = {
+    id,
+    is_team: typeof is_team === "boolean" ? is_team : !!members,
+    group_name: groupName,
+    person_name: person_name,
+    members: members || [],
+    school_name: schoolName,
+    images: [],
+    videos: [],
+    urls: [],
+    created_at: now,
+  };
+
+  try {
+    const hwModel = await import("../models/homework.js");
+    await hwModel.createHomeworkDraft(homework as any);
+  } catch (err) {
+    console.error("create draft error", err);
+    return res.status(500).json({ error: "failed to create draft" });
+  }
+
+  // generate presigned url for the client to upload
+  const key = makeKey({ schoolName, groupName, homeworkId: id, filename });
+  const params = {
+    Bucket: BUCKET,
+    Key: key,
+    ContentType: contentType || "application/octet-stream",
+  } as AWS.S3.PutObjectRequest;
+  const expires = 900;
+  try {
+    const uploadUrl = await s3.getSignedUrlPromise("putObject", {
+      ...params,
+      Expires: expires,
+    });
+    const fileUrl = `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
+    res.json({ uploadUrl, fileUrl, key, expiresIn: expires, homeworkId: id });
+  } catch (err) {
+    console.error("presign error", err);
+    res.status(500).json({ error: "presign failed" });
+  }
+}
+
 async function compressImageBuffer(buffer: Buffer, contentType?: string) {
   // Use sharp to auto-orient and resize if large, and recompress
   try {
