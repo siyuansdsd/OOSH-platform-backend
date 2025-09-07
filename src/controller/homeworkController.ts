@@ -63,7 +63,50 @@ export async function getOne(req: Request, res: Response) {
 }
 
 export async function list(req: Request, res: Response) {
-  const rows = await hw.listHomeworks(100);
+  const limit = Number(req.query.limit) || 100;
+  const rows = await hw.listHomeworks(limit);
+  res.json(rows);
+}
+
+export async function listByPerson(req: Request, res: Response) {
+  const person = req.params.person || (req.query.person as string);
+  if (!person) return res.status(400).json({ error: "person required" });
+  const limit = Number(req.query.limit) || 100;
+  const rows = await hw.listHomeworksByPerson(person, limit);
+  res.json(rows);
+}
+
+export async function listByGroup(req: Request, res: Response) {
+  const group = req.params.group || (req.query.group as string);
+  if (!group) return res.status(400).json({ error: "group required" });
+  const limit = Number(req.query.limit) || 100;
+  const rows = await hw.listHomeworksByGroup(group, limit);
+  res.json(rows);
+}
+
+export async function listBySchool(req: Request, res: Response) {
+  const school = req.params.school || (req.query.school as string);
+  if (!school) return res.status(400).json({ error: "school required" });
+  const limit = Number(req.query.limit) || 100;
+  const rows = await hw.listHomeworksBySchool(school, limit);
+  res.json(rows);
+}
+
+export async function listWithImages(req: Request, res: Response) {
+  const limit = Number(req.query.limit) || 100;
+  const rows = await hw.listHomeworksWithImages(limit);
+  res.json(rows);
+}
+
+export async function listWithVideos(req: Request, res: Response) {
+  const limit = Number(req.query.limit) || 100;
+  const rows = await hw.listHomeworksWithVideos(limit);
+  res.json(rows);
+}
+
+export async function listWithUrls(req: Request, res: Response) {
+  const limit = Number(req.query.limit) || 100;
+  const rows = await hw.listHomeworksWithUrls(limit);
   res.json(rows);
 }
 
