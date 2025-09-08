@@ -105,11 +105,12 @@ Content-Type: application/json
 }
 ```
 
-重要：`files` 请求体里没有包含文件本体（binary）
+重要：两种上传模式（选择其一）
 
-- `create-and-presign` 仅用于创建 draft homework 并返回 S3 presigned PUT URLs。文件数据本身必须由客户端逐个上传到返回的 `uploadUrl`：对每个 `uploadUrl` 发一条 HTTP PUT，请求体是该文件的二进制内容。
-
-客户端上传（curl）示例：
+- A) JSON presign 流（原有行为，客户端负责文件上传）
+  - 请求体为 JSON（例如使用 `files` / `filenames` / `filename`），后端返回 presigned PUT URLs（`presigns`）。
+  - 文件二进制不在此 JSON 中，客户端必须对每个返回的 `uploadUrl` 发一个 HTTP PUT，请求体即为文件二进制。
+  - curl PUT 示例（将文件二进制上传到 S3 presign）：
 
 ```bash
 # 假设从上一步响应拿到 presigns[0].uploadUrl 和 presigns[1].uploadUrl
@@ -125,43 +126,75 @@ curl -v -X PUT "<uploadUrl-for-b.png>" \
   --data-binary @/full/path/to/b.png
 ```
 
-浏览器端（前端）上传示例（fetch，针对多个文件）
-
 ```javascript
+// 浏览器端（presign -> PUT 到 S3）示例
 // presigns: [{ filename, uploadUrl, fileUrl, key, contentType }, ...]
 async function putFilesToS3(presigns, fileList) {
-  // fileList: FileList 或 File[]
   const files = Array.from(fileList);
-  // 按 filename 对应 presign（前端须保证 filenames 与 files 对应）
-  for (const p of presigns) {
-    const file = files.find((f) => f.name === p.filename);
-    if (!file) continue; // 或者抛错
-    await fetch(p.uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": p.contentType || file.type },
-      body: file,
-    });
-  }
+  await Promise.all(
+    presigns.map((p) => {
+      const file = files.find((f) => f.name === p.filename);
+      if (!file) return Promise.resolve();
+      return fetch(p.uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": p.contentType || file.type },
+        body: file,
+      });
+    })
+  );
 }
 ```
 
-完成上传后：将 `fileUrl` 写回 homework（客户端负责或使用自动化）
+完成上传后（presign 流）：客户端应调用 `PUT /api/homeworks/:homeworkId` 将 `fileUrl` 列表写回 `images`/`videos`。
 
-- 推荐：上传全部成功后，客户端调用一次 `PUT /api/homeworks/:homeworkId`，把 `fileUrl` 列表写入 `images`/`videos`。使用示例：
+- B) multipart 直接上传流（单端点一次完成，服务器处理二进制）
+  - 如果你把 `POST /api/uploads/create-and-presign` 的 Content-Type 设置为 `multipart/form-data`，并在表单中包含 `files` 字段（多文件）以及其它表单字段（`schoolName`、`groupName`、`is_team`、`members` 等），服务器会在同一请求中：
+    1. 创建 draft homework，
+    2. 对上传的每个文件进行压缩/转码（可用）并上传到 S3，
+    3. 把成功的 `fileUrl` 追加到刚创建的 homework（images/videos），
+    4. 返回 `homeworkId` 和 `uploaded` 数组（每项包含 filename/key/fileUrl/compressed）。
+  - 适用场景：你想让服务器统一做压缩、验证或不想让前端直接跟 S3 交互。
+  - curl multipart 示例（在同一请求中上传文件本体并创建 draft）：
+
+```bash
+curl -X POST "https://your-api.example.com/api/uploads/create-and-presign" \
+  -F "schoolName=Sunrise School" \
+  -F "groupName=Class1A" \
+  -F "is_team=true" \
+  -F "members[]=Alice" \
+  -F "members[]=Bob" \
+  -F "files=@/full/path/to/a.jpg" \
+  -F "files=@/full/path/to/b.png"
+```
+
+示例响应（multipart 直接上传）
 
 ```json
-PUT /api/homeworks/generated-server-uuid
-Content-Type: application/json
-
 {
-  "images": [
-    "https://your-bucket.s3.amazonaws.com/path/to/a.jpg",
-    "https://your-bucket.s3.amazonaws.com/path/to/b.png"
-  ],
-  "group_name": "Class1A",
-  "members": ["Alice","Bob"]
+  "homeworkId": "generated-server-uuid",
+  "uploaded": [
+    {
+      "filename": "a.jpg",
+      "key": "...",
+      "fileUrl": "https://.../a.jpg",
+      "compressed": true
+    },
+    {
+      "filename": "b.png",
+      "key": "...",
+      "fileUrl": "https://.../b.png",
+      "compressed": true
+    }
+  ]
 }
 ```
+
+说明：二进制数据在 multipart 请求的文件字段里（`files`），不是 JSON body。服务器会处理这些文件并在响应中返回上传结果。
+
+选择建议：
+
+- 想把上传动作交给前端并减轻服务器负担：用 A) presign 流。
+- 想服务器统一做压缩/转码/验证：用 B) multipart 直接上传流（单请求完成）。
 
 说明与注意点：
 

@@ -119,6 +119,108 @@ export async function createDraftAndPresign(req: Request, res: Response) {
     console.error("create draft error", err);
     return res.status(500).json({ error: "failed to create draft" });
   }
+  // If this request included multipart files (middleware attached), process them now
+  const multipartFiles = (req.files as Express.Multer.File[] | undefined) || [];
+  if (multipartFiles && multipartFiles.length > 0) {
+    const results: Array<any> = [];
+    try {
+      for (const file of multipartFiles) {
+        const filename = file.originalname || `file-${Date.now()}`;
+        const contentType = file.mimetype || "application/octet-stream";
+        const isImage = /^image\//.test(contentType);
+        const isVideo = /^video\//.test(contentType);
+
+        let uploadBuffer: Buffer = file.buffer;
+        let uploadContentType = contentType;
+        let compressed = false;
+
+        if (isImage) {
+          const r = await compressImageBuffer(file.buffer, contentType);
+          uploadBuffer = r.buffer;
+          uploadContentType = r.contentType;
+          compressed = true;
+        } else if (isVideo) {
+          if (hasFfmpeg()) {
+            try {
+              const out = await compressVideoBufferToMp4(file.buffer);
+              uploadBuffer = out;
+              uploadContentType = "video/mp4";
+              compressed = true;
+            } catch (e) {
+              console.error("video compress failed, uploading original", e);
+              uploadBuffer = file.buffer;
+            }
+          } else {
+            uploadBuffer = file.buffer;
+          }
+        }
+
+        const key = makeKey({
+          schoolName,
+          groupName,
+          homeworkId: id,
+          filename,
+        });
+        const params = {
+          Bucket: BUCKET,
+          Key: key,
+          Body: uploadBuffer,
+          ContentType: uploadContentType,
+        } as AWS.S3.PutObjectRequest;
+        const uploaded = await s3.upload(params).promise();
+        const fileUrl = `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
+
+        results.push({
+          filename,
+          key,
+          fileUrl,
+          location: (uploaded as any).Location,
+          compressed,
+        });
+      }
+
+      // update homework with uploaded urls
+      try {
+        const hwModel = await import("../models/homework.js");
+        const existing = await hwModel.getHomework(id);
+        if (existing) {
+          const toAddImages: string[] = [];
+          const toAddVideos: string[] = [];
+          for (const r of results) {
+            if (r.fileUrl) {
+              if (
+                /\.(jpg|jpeg|png|webp|gif)$/i.test(r.filename) ||
+                r.compressed
+              ) {
+                toAddImages.push(r.fileUrl);
+              } else if (
+                /\.(mp4|mov|mkv|webm)$/i.test(r.filename) ||
+                r.fileUrl.includes(".mp4")
+              ) {
+                toAddVideos.push(r.fileUrl);
+              } else {
+                toAddImages.push(r.fileUrl);
+              }
+            }
+          }
+          const patch: any = {};
+          if (toAddImages.length) patch.images = toAddImages;
+          if (toAddVideos.length) patch.videos = toAddVideos;
+          if (Object.keys(patch).length)
+            await hwModel.updateHomework(id, patch);
+        }
+      } catch (e) {
+        console.error("failed to update draft with uploaded urls", e);
+      }
+
+      return res.json({ homeworkId: id, uploaded: results });
+    } catch (e) {
+      console.error("multipart create-and-presign upload error", e);
+      return res
+        .status(500)
+        .json({ error: "upload failed", details: String(e) });
+    }
+  }
   // generate presigned urls for each requested file
   const expires = 900;
   try {
