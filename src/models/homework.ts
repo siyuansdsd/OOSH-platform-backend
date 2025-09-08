@@ -18,6 +18,8 @@ export type Homework = {
 const ddb = new AWS.DynamoDB.DocumentClient({
   region: process.env.AWS_REGION || "ap-southeast-2",
 });
+const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-southeast-2" });
+const BUCKET = process.env.S3_BUCKET || "";
 const TABLE = process.env.DYNAMO_TABLE || "homeworks";
 
 export async function initTable() {
@@ -292,7 +294,62 @@ export async function deleteHomework(id: string) {
   const existing = await getHomework(id);
   if (!existing) return;
 
-  // delete member mapping items
+  // Collect S3 keys from images/videos/urls fields (if they reference this bucket)
+  function extractS3Key(possibleUrl: string): string | null {
+    if (!possibleUrl) return null;
+    // if it's already a key (no protocol), assume it's a key
+    if (!possibleUrl.startsWith("http")) return possibleUrl;
+    // try to find amazonaws.com/ and take the rest as key
+    const marker = ".amazonaws.com/";
+    const idx = possibleUrl.indexOf(marker);
+    if (idx >= 0) return possibleUrl.slice(idx + marker.length);
+    // fallback: if URL contains bucket.s3..., attempt split at bucket name
+    if (BUCKET && possibleUrl.includes(BUCKET)) {
+      const i = possibleUrl.indexOf(BUCKET);
+      const after = possibleUrl.slice(i + BUCKET.length + 1);
+      return after || null;
+    }
+    return null;
+  }
+
+  const keys = new Set<string>();
+  const collect = (arr?: any[]) => {
+    if (Array.isArray(arr)) {
+      for (const u of arr) {
+        const k = extractS3Key(String(u || ""));
+        if (k) keys.add(k);
+      }
+    }
+  };
+
+  collect(existing.images);
+  collect(existing.videos);
+  collect(existing.urls);
+
+  // batch delete S3 objects if any
+  if (keys.size > 0 && BUCKET) {
+    const Objects = Array.from(keys).map((Key) => ({ Key }));
+    try {
+      await s3
+        .deleteObjects({
+          TableName: undefined as any,
+          Bucket: BUCKET,
+          Delete: { Objects },
+        } as any)
+        .promise();
+    } catch (err) {
+      // fallback: attempt individual deletes and continue
+      console.error("bulk s3 delete failed, attempting singles", err);
+      for (const k of Objects) {
+        try {
+          await s3.deleteObject({ Bucket: BUCKET, Key: k.Key }).promise();
+        } catch (e) {
+          console.error("failed to delete s3 object", k.Key, e);
+        }
+      }
+    }
+  }
+
   // delete main item
   await ddb
     .delete({
