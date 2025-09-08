@@ -137,4 +137,66 @@ Note: currently create-and-presign writes a draft homework without media. After 
 
 If you want, I can also add a short frontend JS snippet that demonstrates the full flow (create-and-presign + PUT + update).
 
-# OOSH-platform-backend
+## Frontend example (JavaScript)
+
+Below is a minimal browser-friendly example that:
+
+- Calls `POST /api/uploads/create-and-presign` to create a draft and get a presigned URL;
+- Uploads the file to S3 with the returned `uploadUrl` using PUT;
+- Calls `PUT /api/homeworks/:homeworkId` to attach the uploaded file URL to the homework record.
+
+```javascript
+async function uploadAndAttachFile(
+  file,
+  { schoolName, groupName, is_team = true, members = [] } = {}
+) {
+  // 1) create draft and get presign
+  const createResp = await fetch("/api/uploads/create-and-presign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: file.name,
+      contentType: file.type,
+      schoolName,
+      groupName,
+      is_team,
+      members,
+    }),
+  });
+  if (!createResp.ok) throw new Error("create-and-presign failed");
+  const { uploadUrl, fileUrl, homeworkId } = await createResp.json();
+
+  // 2) upload file to S3 using the presigned URL
+  const putResp = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type },
+    body: file,
+  });
+  if (!putResp.ok) throw new Error("upload to S3 failed");
+
+  // 3) attach uploaded file URL to the homework record
+  const updateResp = await fetch(`/api/homeworks/${homeworkId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ images: [fileUrl] }),
+  });
+  if (!updateResp.ok) {
+    // handle gracefully; the file is uploaded but homework update failed
+    throw new Error("failed to update homework with file URL");
+  }
+
+  return { homeworkId, fileUrl };
+}
+
+// Usage example (from an <input type="file"> change handler):
+// const file = event.target.files[0];
+// uploadAndAttachFile(file, { schoolName: 'Sunrise School', groupName: 'Class1A', is_team: true, members: ['Alice'] })
+//   .then(console.log)
+//   .catch(console.error);
+```
+
+Notes:
+
+- Ensure your S3 bucket allows the requested Content-Type and CORS for browser PUTs when using presigned URLs.
+- If you use a different API base path or host, replace `/api/...` with the full origin.
+- For large files consider server-side upload (POST /api/uploads/upload) or multipart upload strategies.
