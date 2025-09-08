@@ -107,43 +107,132 @@ Content-Type: application/json
 
 重要：两种上传模式（选择其一）
 
-- A) JSON presign 流（原有行为，客户端负责文件上传）
-  - 请求体为 JSON（例如使用 `files` / `filenames` / `filename`），后端返回 presigned PUT URLs（`presigns`）。
-  - 文件二进制不在此 JSON 中，客户端必须对每个返回的 `uploadUrl` 发一个 HTTP PUT，请求体即为文件二进制。
-  - curl PUT 示例（将文件二进制上传到 S3 presign）：
+A) JSON presign 流（客户端负责把文件 PUT 到 S3，适合减轻服务器压力）
+
+下面是最常见的三步流程（每步都有可直接复制的代码示例）：
+
+1. 在后端创建 draft 并获取 presigned URL（POST -> 返回 presigns）
+
+- 请求：
+  - URL: POST /api/uploads/create-and-presign
+  - Content-Type: application/json
+  - Body 示例（单文件或多文件都支持）：
+
+```json
+{
+  "files": [
+    { "filename": "a.jpg", "contentType": "image/jpeg" },
+    { "filename": "b.png", "contentType": "image/png" }
+  ],
+  "schoolName": "Sunrise School",
+  "groupName": "Class1A",
+  "is_team": true,
+  "members": ["Alice", "Bob"]
+}
+```
+
+- Curl（获取 presigns 的示例）：
 
 ```bash
-# 假设从上一步响应拿到 presigns[0].uploadUrl 和 presigns[1].uploadUrl
+curl -s -X POST "https://your-api.example.com/api/uploads/create-and-presign" \
+  -H "Content-Type: application/json" \
+  -d '{"files":[{"filename":"a.jpg","contentType":"image/jpeg"},{"filename":"b.png","contentType":"image/png"}],"schoolName":"Sunrise School","groupName":"Class1A"}'
 
-# 上传 a.jpg
+# 响应示例（重要字段）:
+# {
+#   "homeworkId": "generated-server-uuid",
+#   "presigns": [ {"filename":"a.jpg","uploadUrl":"https://...","fileUrl":"https://.../a.jpg","key":"...","expiresIn":900,"contentType":"image/jpeg"}, ... ]
+# }
+```
+
+- 浏览器 fetch（获取 presigns）：
+
+```javascript
+const createResp = await fetch("/api/uploads/create-and-presign", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    files: [{ filename: file.name, contentType: file.type }],
+    schoolName: "Sunrise School",
+  }),
+});
+const { homeworkId, presigns } = await createResp.json();
+```
+
+2. 把每个文件的二进制 PUT 到 presign 返回的 uploadUrl（这一步在客户端执行）
+
+- 注意：
+
+  - 这里传的是文件二进制，不是 JSON。浏览器需要 S3 的 CORS 支持（允许你的 origin、PUT 方法和 Content-Type header）。
+  - uploadUrl 是一个包含临时签名的完整 URL，直接对它发 PUT 即可。
+
+- Curl 示例（逐个上传二进制到 presigned URL）：
+
+```bash
+# 假设你从第 1 步拿到 presigns[0].uploadUrl
 curl -v -X PUT "<uploadUrl-for-a.jpg>" \
   -H "Content-Type: image/jpeg" \
   --data-binary @/full/path/to/a.jpg
 
-# 上传 b.png
+# 上传第二个文件
 curl -v -X PUT "<uploadUrl-for-b.png>" \
   -H "Content-Type: image/png" \
   --data-binary @/full/path/to/b.png
 ```
 
+- 浏览器 fetch 示例（把前端 file input 的文件 PUT 到对应的 presign）：
+
 ```javascript
-// 浏览器端（presign -> PUT 到 S3）示例
 // presigns: [{ filename, uploadUrl, fileUrl, key, contentType }, ...]
-async function putFilesToS3(presigns, fileList) {
-  const files = Array.from(fileList);
+// files: FileList 或 Array<File>
+async function putFilesToS3UsingPresigns(presigns, files) {
+  const fileArr = Array.from(files);
+  // 对应 filename -> presign 匹配（按 filename 匹配）
   await Promise.all(
-    presigns.map((p) => {
-      const file = files.find((f) => f.name === p.filename);
-      if (!file) return Promise.resolve();
-      return fetch(p.uploadUrl, {
+    presigns.map(async (p) => {
+      const f = fileArr.find((x) => x.name === p.filename);
+      if (!f) return; // 跳过找不到的文件
+      const res = await fetch(p.uploadUrl, {
         method: "PUT",
-        headers: { "Content-Type": p.contentType || file.type },
-        body: file,
+        headers: { "Content-Type": p.contentType || f.type },
+        body: f,
       });
+      if (!res.ok) throw new Error(`Upload failed for ${p.filename}`);
     })
   );
 }
 ```
+
+3. 把上传后的 `fileUrl` 写回 homework（后端 draft 会先生成 `homeworkId`，你需要把 fileUrl 附加到该 homework）
+
+- 请求：
+  - URL: PUT /api/homeworks/:homeworkId
+  - Content-Type: application/json
+  - Body 示例（将上传得到的 fileUrl 加到 images 或 videos）：
+
+```json
+{
+  "images": [
+    "https://your-bucket.s3.amazonaws.com/path/to/a.jpg",
+    "https://your-bucket.s3.amazonaws.com/path/to/b.png"
+  ]
+}
+```
+
+- Curl 示例（把 fileUrl 写回 homework）：
+
+```bash
+curl -X PUT "https://your-api.example.com/api/homeworks/generated-server-uuid" \
+  -H "Content-Type: application/json" \
+  -d '{"images":["https://your-bucket.s3.amazonaws.com/path/to/a.jpg","https://your-bucket.s3.amazonaws.com/path/to/b.png"]}'
+```
+
+小结 / 注意事项：
+
+- 1. 第 1 步返回的 `presigns` 中 `fileUrl` 是最终可访问的对象 URL（如果你的 bucket 是公开或通过 CloudFront 访问），也可以当作写回 homework 的值。
+- 2. 浏览器直接 PUT 到 S3 时，必须保证 S3 的 CORS 配置允许你当前的前端 origin、PUT 方法和 Content-Type header；否则浏览器会因 CORS 而失败。
+- 3. 如果你用 Node 环境（非浏览器）去 PUT 二进制，有些 fetch 实现需要 `duplex: "half"` 才能发送流（只在 Node fetch/undici 下需要，浏览器不需要）。
+- 4. 若你希望服务器统一做压缩/转码/验证，可使用 multipart 单端点（B) multipart 直接上传流）。
 
 完成上传后（presign 流）：客户端应调用 `PUT /api/homeworks/:homeworkId` 将 `fileUrl` 列表写回 `images`/`videos`。
 

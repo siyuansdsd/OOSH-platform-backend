@@ -252,7 +252,8 @@ export async function createDraftAndPresign(req: Request, res: Response) {
       });
     }
 
-    // backward-compatible single-file response
+    // Always return presigns array for consistency.
+    // For backward compatibility, also keep top-level single-file fields when there is exactly one presign.
     if (presigns.length === 1) {
       const p = presigns[0];
       return res.json({
@@ -261,6 +262,7 @@ export async function createDraftAndPresign(req: Request, res: Response) {
         key: p.key,
         expiresIn: p.expiresIn,
         homeworkId: id,
+        presigns,
       });
     }
 
