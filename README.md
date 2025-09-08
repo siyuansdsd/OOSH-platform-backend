@@ -49,11 +49,125 @@ Example request body:
 
 2. POST /api/uploads/create-and-presign
 
-- Purpose: create a homework draft server-side (server generates id) and return a presigned URL in one call.
-- Request body (JSON): - `filename` (string) - required - `contentType` (string) - optional - `schoolName` (string) - optional - `groupName` (string) - optional - `is_team` (boolean) - optional - `person_name` (string) - optional - `members` (string[]) - optional
-- Response (JSON): - `homeworkId` (string) - server-generated id for the homework draft - `uploadUrl`, `fileUrl`, `key`, `expiresIn` - same as presign
+- Purpose: create a homework draft server-side (server generates id) and return one or more presigned PUT URLs in one call. This endpoint is backward-compatible: it accepts a single file (old form) or multiple files (new form) and returns either a single presign or an array of presigns.
+- Request body (JSON): supports three input shapes (priority order):
+  - `filename` (string) — single file (backwards compatible)
+  - `filenames` (string[]) — multiple filenames
+  - `files` (array of objects) — multiple files with per-file contentType: [{ filename, contentType }]
+  - optional: `schoolName`, `groupName`, `is_team`, `person_name`, `members` (when creating draft homework)
+- Response (JSON):
+  - Single-file request returns: `{ uploadUrl, fileUrl, key, expiresIn, homeworkId }`
+  - Multi-file request returns: `{ homeworkId, presigns: [{ filename, uploadUrl, fileUrl, key, expiresIn, contentType }, ...] }`
 
-Usage: frontends that already know school/group metadata can call this endpoint. Backend will create a draft homework (without media) and return a presign so the client can upload and then update the homework with the returned fileUrl.
+完整示例（多文件 + 团队信息）
+
+请求：
+
+```json
+POST /api/uploads/create-and-presign
+Content-Type: application/json
+
+{
+  "files": [
+    { "filename": "a.jpg", "contentType": "image/jpeg" },
+    { "filename": "b.png", "contentType": "image/png" }
+  ],
+  "schoolName": "Sunrise School",
+  "groupName": "Class1A",
+  "is_team": true,
+  "members": ["Alice", "Bob"]
+}
+```
+
+示例响应（multi-file）：
+
+```json
+{
+  "homeworkId": "generated-server-uuid",
+  "presigns": [
+    {
+      "filename": "a.jpg",
+      "uploadUrl": "https://your-bucket.s3.amazonaws.com/…?X-Amz-…",
+      "fileUrl": "https://your-bucket.s3.amazonaws.com/path/to/a.jpg",
+      "key": "school/sunrise-school/2025/09/…/class1a/homework/generated-server-uuid/…-a.jpg",
+      "expiresIn": 900,
+      "contentType": "image/jpeg"
+    },
+    {
+      "filename": "b.png",
+      "uploadUrl": "https://your-bucket.s3.amazonaws.com/…?X-Amz-…",
+      "fileUrl": "https://your-bucket.s3.amazonaws.com/path/to/b.png",
+      "key": "school/sunrise-school/2025/09/…/class1a/homework/generated-server-uuid/…-b.png",
+      "expiresIn": 900,
+      "contentType": "image/png"
+    }
+  ]
+}
+```
+
+重要：`files` 请求体里没有包含文件本体（binary）
+
+- `create-and-presign` 仅用于创建 draft homework 并返回 S3 presigned PUT URLs。文件数据本身必须由客户端逐个上传到返回的 `uploadUrl`：对每个 `uploadUrl` 发一条 HTTP PUT，请求体是该文件的二进制内容。
+
+客户端上传（curl）示例：
+
+```bash
+# 假设从上一步响应拿到 presigns[0].uploadUrl 和 presigns[1].uploadUrl
+
+# 上传 a.jpg
+curl -v -X PUT "<uploadUrl-for-a.jpg>" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary @/full/path/to/a.jpg
+
+# 上传 b.png
+curl -v -X PUT "<uploadUrl-for-b.png>" \
+  -H "Content-Type: image/png" \
+  --data-binary @/full/path/to/b.png
+```
+
+浏览器端（前端）上传示例（fetch，针对多个文件）
+
+```javascript
+// presigns: [{ filename, uploadUrl, fileUrl, key, contentType }, ...]
+async function putFilesToS3(presigns, fileList) {
+  // fileList: FileList 或 File[]
+  const files = Array.from(fileList);
+  // 按 filename 对应 presign（前端须保证 filenames 与 files 对应）
+  for (const p of presigns) {
+    const file = files.find((f) => f.name === p.filename);
+    if (!file) continue; // 或者抛错
+    await fetch(p.uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": p.contentType || file.type },
+      body: file,
+    });
+  }
+}
+```
+
+完成上传后：将 `fileUrl` 写回 homework（客户端负责或使用自动化）
+
+- 推荐：上传全部成功后，客户端调用一次 `PUT /api/homeworks/:homeworkId`，把 `fileUrl` 列表写入 `images`/`videos`。使用示例：
+
+```json
+PUT /api/homeworks/generated-server-uuid
+Content-Type: application/json
+
+{
+  "images": [
+    "https://your-bucket.s3.amazonaws.com/path/to/a.jpg",
+    "https://your-bucket.s3.amazonaws.com/path/to/b.png"
+  ],
+  "group_name": "Class1A",
+  "members": ["Alice","Bob"]
+}
+```
+
+说明与注意点：
+
+- `create-and-presign` 会把 `is_team/groupName/members/schoolName` 写入 draft homework，所以你在后续的 `PUT /api/homeworks/:id` 中可以只附加 `images`/`videos`，也可重复发送团队信息以确保完整性。
+- 如果你希望上传成功后自动把 `fileUrl` 写回 homework，可以使用 S3 Events + Lambda：在 S3 对象创建事件中解析 object key（或使用 object metadata 包含 homeworkId），并调用 DynamoDB 更新逻辑。
+- 浏览器直接 PUT 到 S3 时，请确保 S3 的 CORS 配置允许你的前端 origin、PUT 方法和 Content-Type header；否则浏览器会因为 CORS 而失败。
 
 3. POST /api/uploads/upload
 

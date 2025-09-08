@@ -72,17 +72,26 @@ export async function presignHandler(req: Request, res: Response) {
 // Create a homework draft (server-generated id) and return a presigned URL for uploading a file
 export async function createDraftAndPresign(req: Request, res: Response) {
   const payload = req.body || {};
-  // fields used to create the draft homeworks
-  const {
-    filename,
-    contentType,
-    schoolName,
-    groupName,
-    is_team,
-    person_name,
-    members,
-  } = payload;
-  if (!filename) return res.status(400).json({ error: "filename required" });
+  // support single filename or multiple files
+  // payload may contain: filename (string) OR filenames: string[] OR files: [{ filename, contentType }]
+  let filesInput: Array<{ filename: string; contentType?: string }> = [];
+  if (payload.filename) {
+    filesInput.push({
+      filename: String(payload.filename),
+      contentType: payload.contentType,
+    });
+  } else if (Array.isArray(payload.filenames) && payload.filenames.length > 0) {
+    filesInput = payload.filenames.map((f: any) => ({ filename: String(f) }));
+  } else if (Array.isArray(payload.files) && payload.files.length > 0) {
+    filesInput = payload.files.map((f: any) => ({
+      filename: String(f.filename),
+      contentType: f.contentType,
+    }));
+  }
+  if (filesInput.length === 0)
+    return res.status(400).json({ error: "filename required" });
+
+  const { schoolName, groupName, is_team, person_name, members } = payload;
   if (!BUCKET)
     return res.status(500).json({ error: "S3_BUCKET not configured" });
 
@@ -110,22 +119,51 @@ export async function createDraftAndPresign(req: Request, res: Response) {
     console.error("create draft error", err);
     return res.status(500).json({ error: "failed to create draft" });
   }
-
-  // generate presigned url for the client to upload
-  const key = makeKey({ schoolName, groupName, homeworkId: id, filename });
-  const params = {
-    Bucket: BUCKET,
-    Key: key,
-    ContentType: contentType || "application/octet-stream",
-  } as AWS.S3.PutObjectRequest;
+  // generate presigned urls for each requested file
   const expires = 900;
   try {
-    const uploadUrl = await s3.getSignedUrlPromise("putObject", {
-      ...params,
-      Expires: expires,
-    });
-    const fileUrl = `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
-    res.json({ uploadUrl, fileUrl, key, expiresIn: expires, homeworkId: id });
+    const presigns: Array<any> = [];
+    for (const f of filesInput) {
+      const key = makeKey({
+        schoolName,
+        groupName,
+        homeworkId: id,
+        filename: f.filename,
+      });
+      const params = {
+        Bucket: BUCKET,
+        Key: key,
+        ContentType: f.contentType || "application/octet-stream",
+      } as AWS.S3.PutObjectRequest;
+      const uploadUrl = await s3.getSignedUrlPromise("putObject", {
+        ...params,
+        Expires: expires,
+      });
+      const fileUrl = `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
+      presigns.push({
+        filename: f.filename,
+        uploadUrl,
+        fileUrl,
+        key,
+        expiresIn: expires,
+        contentType: params.ContentType,
+      });
+    }
+
+    // backward-compatible single-file response
+    if (presigns.length === 1) {
+      const p = presigns[0];
+      return res.json({
+        uploadUrl: p.uploadUrl,
+        fileUrl: p.fileUrl,
+        key: p.key,
+        expiresIn: p.expiresIn,
+        homeworkId: id,
+      });
+    }
+
+    // multi-file response
+    return res.json({ homeworkId: id, presigns });
   } catch (err) {
     console.error("presign error", err);
     res.status(500).json({ error: "presign failed" });
@@ -272,5 +310,147 @@ export async function uploadHandler(req: Request, res: Response) {
   } catch (err) {
     console.error("uploadHandler error", err);
     res.status(500).json({ error: "upload failed" });
+  }
+}
+
+export async function uploadMultiHandler(req: Request, res: Response) {
+  const files = (req.files as Express.Multer.File[] | undefined) || [];
+  const { homeworkId, schoolName, groupName } = req.body || {};
+  if (!files || files.length === 0)
+    return res.status(400).json({ error: "files required" });
+  if (!BUCKET)
+    return res.status(500).json({ error: "S3_BUCKET not configured" });
+
+  const results: Array<{
+    filename: string;
+    key: string;
+    fileUrl: string;
+    location?: string;
+    compressed?: boolean;
+    error?: string;
+  }> = [];
+
+  try {
+    // process files sequentially to avoid overwhelming memory/CPU. Could be parallelized with concurrency limit.
+    for (const file of files) {
+      const filename = file.originalname || `file-${Date.now()}`;
+      const contentType = file.mimetype || "application/octet-stream";
+      const isImage = /^image\//.test(contentType);
+      const isVideo = /^video\//.test(contentType);
+
+      try {
+        let uploadBuffer: Buffer = file.buffer;
+        let uploadContentType = contentType;
+        let compressed = false;
+
+        if (isImage) {
+          const r = await compressImageBuffer(file.buffer, contentType);
+          uploadBuffer = r.buffer;
+          uploadContentType = r.contentType;
+          compressed = true;
+        } else if (isVideo) {
+          if (hasFfmpeg()) {
+            try {
+              const out = await compressVideoBufferToMp4(file.buffer);
+              uploadBuffer = out;
+              uploadContentType = "video/mp4";
+              compressed = true;
+            } catch (e) {
+              console.error("video compress failed, uploading original", e);
+              uploadBuffer = file.buffer;
+            }
+          } else {
+            uploadBuffer = file.buffer;
+          }
+        } else {
+          uploadBuffer = file.buffer;
+        }
+
+        const key = makeKey({
+          schoolName,
+          groupName,
+          homeworkId: homeworkId || `no-homework-${Date.now()}`,
+          filename,
+        });
+        const params = {
+          Bucket: BUCKET,
+          Key: key,
+          Body: uploadBuffer,
+          ContentType: uploadContentType,
+        } as AWS.S3.PutObjectRequest;
+        const uploaded = await s3.upload(params).promise();
+        const fileUrl = `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
+
+        results.push({
+          filename,
+          key,
+          fileUrl,
+          location: (uploaded && (uploaded as any).Location) || undefined,
+          compressed,
+        });
+      } catch (e: any) {
+        console.error("file upload error", e);
+        results.push({
+          filename: file.originalname || "unknown",
+          key: "",
+          fileUrl: "",
+          error: String(e),
+        });
+      }
+    }
+
+    // if homeworkId provided, attempt to append uploaded URLs to the homework's images/videos arrays
+    if (homeworkId) {
+      try {
+        const hwModel = await import("../models/homework.js");
+        const existing = await hwModel.getHomework(homeworkId);
+        if (existing) {
+          const toAddImages: string[] = [];
+          const toAddVideos: string[] = [];
+          for (const r of results) {
+            if (r.fileUrl && !r.error) {
+              if (
+                /\.(jpg|jpeg|png|webp|gif)$/i.test(r.filename) ||
+                r.compressed
+              ) {
+                toAddImages.push(r.fileUrl);
+              } else if (
+                /\.(mp4|mov|mkv|webm)$/i.test(r.filename) ||
+                r.fileUrl.includes(".mp4")
+              ) {
+                toAddVideos.push(r.fileUrl);
+              } else {
+                // default to images for unknown types
+                toAddImages.push(r.fileUrl);
+              }
+            }
+          }
+          const patch: any = {};
+          if (toAddImages.length) {
+            patch.images = Array.isArray(existing.images)
+              ? [...existing.images, ...toAddImages]
+              : toAddImages;
+          }
+          if (toAddVideos.length) {
+            patch.videos = Array.isArray(existing.videos)
+              ? [...existing.videos, ...toAddVideos]
+              : toAddVideos;
+          }
+          if (Object.keys(patch).length) {
+            await hwModel.updateHomework(homeworkId, patch);
+          }
+        }
+      } catch (e) {
+        console.error("failed to update homework with uploaded urls", e);
+        // continue; uploads succeeded but homework update failed
+      }
+    }
+
+    return res.json({ uploaded: results });
+  } catch (err) {
+    console.error("uploadMultiHandler error", err);
+    return res
+      .status(500)
+      .json({ error: "upload failed", details: String(err) });
   }
 }

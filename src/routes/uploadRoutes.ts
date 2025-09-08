@@ -4,6 +4,7 @@ import {
   presignHandler,
   uploadHandler,
 } from "../controller/uploadController.js";
+import { uploadMultiHandler } from "../controller/uploadController.js";
 
 const router = express.Router();
 const upload = multer({
@@ -21,5 +22,8 @@ router.post("/create-and-presign", async (req, res) => {
 });
 // server-side upload with compression
 router.post("/upload", upload.single("file"), uploadHandler);
+
+// server-side multi-file upload with compression
+router.post("/upload-multi", upload.array("files", 20), uploadMultiHandler);
 
 export default router;
