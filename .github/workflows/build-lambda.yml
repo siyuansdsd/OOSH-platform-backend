@@ -1,0 +1,89 @@
+
+# NOTE:
+# This workflow builds a lambda.zip with native modules compiled for Amazon Linux
+# (so sharp will work in AWS Lambda). It supports being run manually from Actions
+# (workflow_dispatch). When run you can provide `lambda_name` (defaults to "try").
+#
+# The YAML references `secrets` and `github.event` which cannot be validated by
+# this editor's static linter but are available at runtime inside GitHub Actions.
+name: Build Lambda (linux sharp)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lambda_name:
+        description: 'Lambda function name to update'
+        required: false
+        default: 'try'
+      s3_bucket:
+        description: 'Optional S3 bucket to upload lambda.zip (leave blank to skip)'
+        required: false
+        default: ''
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install deps (dev) and build
+        run: |
+          npm ci
+          npx tsc -p . --outDir dist
+
+      - name: Copy package files to dist
+        run: |
+          cp package.json package-lock.json dist/ || true
+
+      - name: Build production node_modules for Amazon Linux (sharp compatible)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/var/task -w /var/task lambci/lambda:build-nodejs18.x \
+            bash -lc "cd dist && rm -rf node_modules && npm ci --production"
+
+      - name: Zip dist to lambda.zip
+        run: |
+          (cd dist && zip -r ../lambda.zip .)
+
+      - name: Upload lambda.zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-zip
+          path: lambda.zip
+
+      - name: Configure AWS credentials (if provided)
+        if: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'ap-southeast-2' }}
+
+      - name: Upload to S3 (optional) and Update Lambda (if creds present)
+        if: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION || 'ap-southeast-2' }}
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET || github.event.inputs.s3_bucket || '' }}
+          AWS_LAMBDA_FUNCTION_NAME: ${{ github.event.inputs.lambda_name || 'try' }}
+        run: |
+          set -euo pipefail
+          echo "Lambda name: $AWS_LAMBDA_FUNCTION_NAME"
+          if [ -n "$AWS_S3_BUCKET" ]; then
+            echo "Uploading lambda.zip to s3://$AWS_S3_BUCKET/lambda.zip"
+            aws s3 cp lambda.zip s3://$AWS_S3_BUCKET/lambda.zip
+          else
+            echo "No S3 bucket provided; skipping S3 upload"
+          fi
+
+          echo "Updating Lambda function $AWS_LAMBDA_FUNCTION_NAME using local lambda.zip"
+          aws lambda update-function-code \
+            --function-name "$AWS_LAMBDA_FUNCTION_NAME" \
+            --zip-file fileb://lambda.zip \
+            --publish
