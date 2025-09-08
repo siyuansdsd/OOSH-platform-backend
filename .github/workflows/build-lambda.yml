@@ -49,7 +49,8 @@ jobs:
 
       - name: Build production node_modules for Amazon Linux (sharp compatible)
         run: |
-          docker run --rm -v "${{ github.workspace }}":/var/task -w /var/task lambci/lambda:build-nodejs18.x \
+          # Use AWS SAM public build image (Amazon Linux) to compile native modules
+          docker run --rm -v "${{ github.workspace }}":/var/task -w /var/task public.ecr.aws/sam/build-nodejs18.x \
             bash -lc "cd dist && rm -rf node_modules && npm ci --production"
 
       - name: Zip dist to lambda.zip
