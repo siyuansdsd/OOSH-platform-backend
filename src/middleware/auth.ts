@@ -22,7 +22,8 @@ export async function authMiddleware(
   const user = await userModel.getUserById(String(userId));
   if (!user) return res.status(401).json({ error: "user not found" });
   const tokenVersion = (payload as any).token_version || 0;
-  if ((user.token_version || 0) !== tokenVersion) return res.status(401).json({ error: "token revoked" });
+  if ((user.token_version || 0) !== tokenVersion)
+    return res.status(401).json({ error: "token revoked" });
   // attach payload and user
   (req as any).auth = payload;
   (req as any).authUser = user;

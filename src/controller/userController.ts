@@ -64,10 +64,10 @@ export async function login(req: Request, res: Response) {
   if (!ok) return res.status(401).json({ error: "invalid credentials" });
 
   const token = signToken({
-  id: user.id,
-  username: user.username,
-  role: user.role,
-  token_version: user.token_version || 0,
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    token_version: user.token_version || 0,
   });
   // update last_login
   await userModel.updateUser(user.id, { last_login: new Date().toISOString() });

@@ -35,7 +35,8 @@ export async function createUser(user: Partial<UserItem>) {
     password_hash: user.password_hash,
     role: (user.role as Role) || "User",
     blocked: !!user.blocked,
-  token_version: typeof user.token_version === 'number' ? user.token_version : 0,
+    token_version:
+      typeof user.token_version === "number" ? user.token_version : 0,
     created_at: now,
     last_login: user.last_login,
   };
