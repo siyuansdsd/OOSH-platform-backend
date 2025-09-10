@@ -13,6 +13,8 @@ app.get("/api", (req, res) => {
 app.use("/api/homeworks", homeworkRoutes);
 import uploadRoutes from "./routes/uploadRoutes.js";
 app.use("/api/uploads", uploadRoutes);
+import userRoutes from "./routes/userRoutes.js";
+app.use("/api/users", userRoutes);
 
 // initialize DB table (best effort)
 initTable().catch((err) => console.error("initTable error", err));

@@ -373,6 +373,41 @@ Note: currently create-and-presign writes a draft homework without media. After 
 
 If you want, I can also add a short frontend JS snippet that demonstrates the full flow (create-and-presign + PUT + update).
 
+---
+
+## Users & Roles (新增加)
+
+我们新增了 `User` 模型和基于角色的权限系统，支持以下角色：
+
+- Admin — 全权限：可以登陆用户页面、登陆 admin 平台、创建/删除/修改用户、踢出登录状态、block 账户、查看所有用户并更改所有资源权限。
+- Editor — 内容编辑权限：可以登陆用户页面、登陆 admin 平台，上传/修改内容，但**不能**管理用户（新增/删除/block 等）。
+- User — 只读普通用户：只能查看 homework，不能登录 admin 平台，不能查看其他用户信息。
+- StudentPublic — 学生公共账号：只能上传（create）和读取 homework，但不能查看或修改别人账号。
+
+主要 API（基于 JWT）:
+
+- `POST /api/users/register` — 注册新账号（只能创建 Editor/User/StudentPublic）。请求体：`{ username, password, display_name?, email?, role? }`。
+- `POST /api/users/login` — 登录，返回 `{ token, user }`。
+- `POST /api/users` — Admin 专用：创建任意角色（包括 Admin）。需要 Authorization: Bearer <token>。
+- `GET /api/users` — Admin 专用：列出所有用户。
+- `GET /api/users/:id` — Admin 专用：查看用户详情。
+- `PUT /api/users/:id` — Admin 专用：更新用户（可改 role、blocked 等）。
+- `DELETE /api/users/:id` — Admin 专用：删除用户。
+- `POST /api/users/:id/block` — Admin 专用：block/unblock 账户。
+
+鉴权规则（简表）：
+
+- Admin: 所有权限。
+- Editor: 除了账户管理（新增、删除、改动、查看、block、踢出登录）外，拥有上传/修改内容权限。
+- User: 只能对 homework 做 Read（不可查看其他用户信息）。
+- StudentPublic: 对 homework 有 Read 和 Create 权限（仅限 homework，不可查看其他用户信息）。
+
+实现细节：
+
+- 使用 DynamoDB 存储用户（同一 table，entityType="USER"）。
+- 密码使用 `bcryptjs` 哈希，登录返回 JWT（`JWT_SECRET` 环境变量，默认 dev-secret）。
+- `POST /api/users/register` 只允许创建 Editor/User/StudentPublic；Admin 必须由已有 Admin 使用 `POST /api/users` 创建。
+
 ## Frontend example (JavaScript)
 
 Below is a minimal browser-friendly example that:
