@@ -408,6 +408,60 @@ If you want, I can also add a short frontend JS snippet that demonstrates the fu
 - 密码使用 `bcryptjs` 哈希，登录返回 JWT（`JWT_SECRET` 环境变量，默认 dev-secret）。
 - `POST /api/users/register` 只允许创建 Editor/User/StudentPublic；Admin 必须由已有 Admin 使用 `POST /api/users` 创建。
 
+### Account / Token revoke（踢出登录）
+
+为了支持 Admin 强制把某个用户登出（踢出）或使已签发的 token 失效，服务端使用 `token_version` 机制：
+
+- 每个用户记录包含 `token_version`（整数，默认 0）。
+- 登录时服务端在 JWT 的 payload 中包含 `token_version`（例如 { id, username, role, token_version }）。
+- 中间件在验证 JWT 后，会读取用户最新的 `token_version` 并与 token 中的 `token_version` 比对：若不一致则认为 token 已被撤销，拒绝访问并返回 401/403。
+
+Admin 可以通过下列接口强制更新用户的 `token_version`（实现踢出效果）或封禁账户：
+
+- `POST /api/users/:id/kick` — Admin 专用：把目标用户的 `token_version` 自增（使所有先前签发的 token 失效）。
+- `POST /api/users/:id/block` — Admin 专用：把目标用户 `blocked` 置为 true，用户将无法登录或使用 API。
+
+客户端常见操作：
+
+- 用户主动登出：客户端直接删除本地保存的 token（cookie/localStorage）。服务器端无需操作，除非希望立即失效，请求 Admin 路径或提供用户注销接口来增加 `token_version`。
+- 管理员踢出：调用 `POST /api/users/:id/kick`，响应成功后被踢用户的任何后续请求会因为 `token_version` 不匹配而被拒绝，需要重新登录获取新 token。
+
+示例 curl：
+
+1. 登录并获取 token（示例）
+
+```bash
+curl -s -X POST "https://your-api.example.com/api/users/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"secret"}'
+
+# 响应示例: { "token": "ey...", "user": { "id": "...", "role": "Admin" } }
+```
+
+2. Admin 踢出某用户（把 token_version +1）
+
+```bash
+curl -X POST "https://your-api.example.com/api/users/<userId>/kick" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json"
+```
+
+3. 被踢用户的请求会被拒绝（示例 fetch）
+
+```javascript
+const res = await fetch("/api/homeworks", {
+  headers: { Authorization: `Bearer ${token}` },
+});
+if (res.status === 401 || res.status === 403) {
+  // token 被撤销或权限不足 —— 需要重新登录
+}
+```
+
+注意：
+
+- token_version 方案简单可靠，适用于短期会话失效场景。若需要全局 token 黑名单或跨实例即时失效，也可实现集中黑名单（例如 Redis）或在 token 中加入 `token_version` 的同时在用户表之外维护撤销列表。
+- `token_version` 增加只影响已经签发的 token，后续登录会签发包含新 `token_version` 的新 token。
+
 ## Frontend example (JavaScript)
 
 Below is a minimal browser-friendly example that:
