@@ -33,7 +33,8 @@ export async function authMiddleware(
 export function requireRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     const auth = (req as any).auth || {};
-    const role = auth.role;
+    const authUser = (req as any).authUser;
+    const role = (authUser && authUser.role) || auth.role;
     if (!role) return res.status(403).json({ error: "forbidden" });
     if (roles.includes(role)) return next();
     return res.status(403).json({ error: "forbidden" });
