@@ -76,17 +76,19 @@ npm install redis @aws-sdk/client-ses uuid
 - REDIS_PASSWORD：（可选，若启用 AUTH）
 - REDIS_CLUSTER：true/false（可选，集群模式）
 - AWS_REGION / SES_REGION：AWS 区域，例如 `ap-southeast-2`
-- SES_FROM：邮件发件人（需在 SES 验证的邮箱或域，例如 `no-reply@maxhacker.io`）
+- SES_FROM：邮件发件人（需在 SES 验证的邮箱或域，例如 `<SES_VERIFIED_FROM_EMAIL>`）
 
-示例 `.env` 片段：
+示例 `.env` 片段（请用你的实际值替换占位符；不要在仓库中提交真实凭证或终端节点）：
 ```
 
-REDIS_HOST=maxhackercode-kaciy7.serverless.apse2.cache.amazonaws.com
+# 示例（使用占位符替换真实值）
+
+REDIS_HOST=<YOUR_REDIS_ENDPOINT>
 REDIS_PORT=6379
 REDIS_TLS=true
 REDIS_CLUSTER=false
-AWS_REGION=ap-southeast-2
-SES_FROM=no-reply@maxhacker.io
+AWS_REGION=<YOUR_AWS_REGION>
+SES_FROM=<SES_VERIFIED_FROM_EMAIL>
 
 ```
 
