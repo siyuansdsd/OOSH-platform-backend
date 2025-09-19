@@ -1,6 +1,7 @@
 import express from "express";
 import homeworkRoutes from "./routes/homeworkRoutes.js";
 import { initTable } from "./models/homework.js";
+import verificationRoutes from './routes/verificationRoutes.js';
 
 const app = express();
 
@@ -15,6 +16,7 @@ import uploadRoutes from "./routes/uploadRoutes.js";
 app.use("/api/uploads", uploadRoutes);
 import userRoutes from "./routes/userRoutes.js";
 app.use("/api/users", userRoutes);
+app.use('/api/verify', verificationRoutes);
 
 // initialize DB table (best effort)
 initTable().catch((err) => console.error("initTable error", err));

@@ -11,13 +11,16 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-ses": "^3.891.0",
     "@vendia/serverless-express": "^4.12.6",
     "aws-sdk": "^2.1692.0",
     "bcryptjs": "^3.0.2",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
-    "sharp": "^0.32.1"
+    "redis": "^5.8.2",
+    "sharp": "^0.32.1",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.102",
