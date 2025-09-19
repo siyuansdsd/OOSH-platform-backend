@@ -11,12 +11,27 @@ export async function sendCode(req: Request, res: Response) {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   const key = `verify:${email}`;
   try {
+    console.info("[verify] sendCode - set redis key", { key, ttl: CODE_TTL });
     await redisSet(key, code, CODE_TTL);
+    console.info("[verify] sendCode - after redis set", { key });
+
+    console.info("[verify] sendCode - calling sendVerificationEmail", {
+      email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
+    });
     await sendVerificationEmail(email, code);
+    console.info("[verify] sendCode - email sent", {
+      email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
+    });
     return res.json({ ok: true });
   } catch (err: any) {
-    console.error("sendCode err", err);
-    return res.status(500).json({ error: "send failed" });
+    console.error("[verify] sendCode err", {
+      error: err?.message ?? err,
+      stack: err?.stack,
+    });
+    const payload: any = { error: "send failed" };
+    if (process.env.NODE_ENV !== "production")
+      payload.details = err?.message ?? String(err);
+    return res.status(500).json(payload);
   }
 }
 
