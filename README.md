@@ -35,23 +35,128 @@ Base path: `/api`
 - Request body (JSON): - `homeworkId` (string) - used to build the S3 key path (optional but recommended) - `filename` (string) - required - `contentType` (string) - optional - `schoolName` (string) - optional (used in key) - `groupName` (string) - optional (used in key)
 - Response (JSON): - `uploadUrl` (string) - signed URL for PUT - `fileUrl` (string) - public S3 URL for reading - `key` (string) - S3 object key - `expiresIn` (number)
 
-Example request body:
-
-```json
 {
-  "homeworkId": "client-uuid-1",
-  "filename": "photo.jpg",
-  "contentType": "image/jpeg",
-  "schoolName": "Sunrise School",
-  "groupName": "Class1A"
+"homeworkId": "client-uuid-1",
+"filename": "photo.jpg",
+"contentType": "image/jpeg",
+"schoolName": "Sunrise School",
+"groupName": "Class1A"
 }
+
 ```
 
 2. POST /api/uploads/create-and-presign
 
 - Purpose: create a homework draft server-side (server generates id) and return one or more presigned PUT URLs in one call. This endpoint is backward-compatible: it accepts a single file (old form) or multiple files (new form) and returns either a single presign or an array of presigns.
 - Request body (JSON): supports three input shapes (priority order):
-  - `filename` (string) — single file (backwards compatible)
+
+## Email verification (new)
+
+本文档详细说明新增的邮件验证码功能与开放的 HTTP API，包含环境变量、依赖、权限、测试步骤与故障排查。
+
+### 概述
+- 功能：通过 Amazon SES 发送邮件验证码，并把验证码保存在 Redis（ElastiCache）中，供后端校验登录/注册或短期验证使用。验证码默认有效期 5 分钟（300 秒）。
+- 流程：客户端请求 `POST /api/verify/send-code` -> 服务器生成 6 位数字验证码并写入 Redis（键 `verify:<email>`），调用 SES 发送邮件 -> 用户收到邮件并将 code 发到 `POST /api/verify/verify-code` 校验 -> 校验通过后删除 Redis 中的验证码。
+
+### 新增依赖
+- Node.js 包：`redis`（或 `ioredis` 用于 cluster）、`@aws-sdk/client-ses`、`uuid`（已用于示例，但不是必须）。
+
+安装示例：
+```
+
+npm install redis @aws-sdk/client-ses uuid
+
+```
+
+### 环境变量
+在 Lambda 或本地 `.env` 中配置：
+- REDIS_HOST：ElastiCache endpoint（不带协议）
+- REDIS_PORT：6379（缺省）
+- REDIS_TLS：true/false（若启用了 in-transit encryption 则为 true）
+- REDIS_PASSWORD：（可选，若启用 AUTH）
+- REDIS_CLUSTER：true/false（可选，集群模式）
+- AWS_REGION / SES_REGION：AWS 区域，例如 `ap-southeast-2`
+- SES_FROM：邮件发件人（需在 SES 验证的邮箱或域，例如 `no-reply@maxhacker.io`）
+
+示例 `.env` 片段：
+```
+
+REDIS_HOST=maxhackercode-kaciy7.serverless.apse2.cache.amazonaws.com
+REDIS_PORT=6379
+REDIS_TLS=true
+REDIS_CLUSTER=false
+AWS_REGION=ap-southeast-2
+SES_FROM=no-reply@maxhacker.io
+
+```
+
+### IAM 权限
+- 如果在 Lambda 中运行，执行角色需要至少以下 SES 权限：
+```
+
+"ses:SendEmail",
+"ses:SendRawEmail",
+"ses:SendTemplatedEmail"
+
+```
+（可将 Resource 进一步限制为特定 identity ARN）
+
+### HTTP API
+1) 发送验证码
+- 路径：POST /api/verify/send-code
+- 请求体（JSON）：{ "email": "user@example.com" }
+- 返回：
+  - 200 { "ok": true } — 发送成功
+  - 400 { "error": "email required" } — 参数错误
+  - 500 { "error": "send failed" } — 服务器/SES/Redis 错误
+
+2) 校验验证码
+- 路径：POST /api/verify/verify-code
+- 请求体（JSON）：{ "email": "user@example.com", "code": "123456" }
+- 返回：
+  - 200 { "ok": true } — 验证通过
+  - 400 { "error": "invalid" } — 验证失败（不匹配或已过期）
+  - 400 { "error": "email and code required" } — 参数缺失
+  - 500 { "error": "verify failed" } — 内部错误
+
+示例 curl：
+```
+
+curl -X POST https://your-api.example.com/api/verify/send-code \
+ -H "Content-Type: application/json" \
+ -d '{"email":"you@example.com"}'
+
+curl -X POST https://your-api.example.com/api/verify/verify-code \
+ -H "Content-Type: application/json" \
+ -d '{"email":"you@example.com","code":"123456"}'
+
+````
+
+### 测试步骤（本地）
+1. 在 `.env` 中配置上面列出的环境变量（REDIS_* 与 SES_*）。
+2. 确保可以连接 ElastiCache（如果本地无法访问 VPC 内的 ElastiCache，可在同 VPC 的 EC2 或用临时 Lambda 测试）。
+3. 启动服务器（`npm run dev` 或 `node`），调用 `/api/verify/send-code`，检查终端或 CloudWatch 日志确认 SES API 返回。检查邮件收件箱。然后调用 `/api/verify/verify-code` 验证。
+
+### 部署到 Lambda 注意事项
+- 确保 Lambda 在可访问 ElastiCache 的 VPC 子网并分配正确安全组。Redis 的 Security Group 需允许来自 Lambda 的入站。
+- 把同样的环境变量写入 Lambda 配置（环境变量项）。
+- Lambda 执行角色需要 SES 权限。
+
+### 常见故障与排查
+- 连接超时 / Task timed out：检查 Lambda VPC、子网路由与 NAT/Endpoints；对于 Redis，确认安全组允许来自 Lambda 的入站。
+- NOAUTH Authentication required：需要在 `.env` 设置 `REDIS_PASSWORD`。
+- SES 发送失败：检查 SES 是否在 sandbox（沙箱）模式，若是需申请解除；确认 `SES_FROM` 已验证且 DKIM/SPF 配置正确以提高送达率。
+- 邮件被标记为垃圾邮件：建议设置 DKIM（SES 提供 CNAME）、SPF（TXT include:amazonses.com）和 DMARC（先 p=none 收集报告）。
+
+### 代码位置说明
+- Redis 工具：`src/utils/redisClient.ts`
+- SES 工具：`src/utils/ses.ts`
+- 业务控制器：`src/controller/verificationController.ts`
+- 路由注册：`src/routes/verificationRoutes.ts`，并在 `src/app.ts` 中注册 `/api/verify` 路由
+
+---
+
+如果你需要我把这段文档放在 `README.md` 的特定位置或生成 API 文档页面（例如 docs site），告诉我要放在哪儿我会继续操作。
   - `filenames` (string[]) — multiple filenames
   - `files` (array of objects) — multiple files with per-file contentType: [{ filename, contentType }]
   - optional: `schoolName`, `groupName`, `is_team`, `person_name`, `members` (when creating draft homework)
@@ -77,7 +182,7 @@ Content-Type: application/json
   "is_team": true,
   "members": ["Alice", "Bob"]
 }
-```
+````
 
 示例响应（multi-file）：
 
