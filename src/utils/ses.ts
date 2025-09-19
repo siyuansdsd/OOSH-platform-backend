@@ -7,9 +7,9 @@ const client = new SESClient({ region });
 
 export async function sendVerificationEmail(to: string, code: string) {
   const from = process.env.SES_FROM;
-  const subject = "你的验证码";
-  const bodyHtml = `<p>你的验证码是 <strong>${code}</strong>. 有效期 5 分钟。</p>`;
-  const bodyText = `你的验证码是 ${code}. 有效期 5 分钟.`;
+  const subject = "Your verification code";
+  const bodyHtml = `<p>Your verification code is <strong>${code}</strong>. It is valid for 5 minutes.</p>`;
+  const bodyText = `Your verification code is ${code}. It is valid for 5 minutes.`;
 
   const params = {
     Destination: { ToAddresses: [to] },
