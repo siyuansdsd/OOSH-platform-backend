@@ -5,6 +5,8 @@ export type Homework = {
   // is_team: true => team homework (requires group_name + members)
   // is_team: false => personal homework (requires person_name)
   is_team: boolean;
+  title: string;
+  description: string;
   group_name?: string;
   person_name?: string;
   school_name: string;
@@ -35,6 +37,9 @@ function validateRequiredFields(
   const missing: string[] = [];
   if (!h.id) missing.push("id");
   if (h.is_team === undefined) missing.push("is_team");
+  if (typeof h.title !== "string" || !h.title.trim()) missing.push("title");
+  if (typeof h.description !== "string" || !h.description.trim())
+    missing.push("description");
   if (!h.school_name) missing.push("school_name");
   // conditional: team requires group_name + members; personal requires person_name
   if (h.is_team) {
@@ -81,6 +86,8 @@ export async function createHomework(h: Homework) {
   const item = { ...h } as any;
   // validate required fields (images/videos/urls are optional)
   validateRequiredFields(item);
+  item.title = item.title.trim();
+  item.description = item.description.trim();
 
   // construct PK/SK and stable index fields
   item.PK = `HOMEWORK#${item.id}`;
@@ -108,6 +115,8 @@ export async function createHomeworkDraft(h: Homework) {
   const item = { ...h } as any;
   // validate required fields but allow empty media
   validateRequiredFields(item, { requireMedia: false });
+  item.title = item.title.trim();
+  item.description = item.description.trim();
 
   // construct PK/SK and stable index fields
   item.PK = `HOMEWORK#${item.id}`;
@@ -157,6 +166,9 @@ export async function updateHomework(id: string, patch: Partial<Homework>) {
   } catch (err) {
     throw err;
   }
+  if (typeof updated.title === "string") updated.title = updated.title.trim();
+  if (typeof updated.description === "string")
+    updated.description = updated.description.trim();
   // ensure PK/SK remain present
   updated.PK = `HOMEWORK#${updated.id}`;
   updated.SK = `META#${updated.created_at}`;

@@ -6,6 +6,16 @@ export async function create(req: Request, res: Response) {
   const id = uuidv4();
   const payload = req.body;
   const now = new Date().toISOString();
+  const title =
+    typeof payload.title === "string" ? payload.title.trim() : "";
+  const description =
+    typeof payload.description === "string"
+      ? payload.description.trim()
+      : "";
+  if (!title)
+    return res.status(400).json({ error: "title required" });
+  if (!description)
+    return res.status(400).json({ error: "description required" });
   // determine is_team: prefer explicit flag, otherwise infer from payload
   let is_team: boolean | undefined = payload.is_team;
   if (typeof is_team === "undefined") {
@@ -18,6 +28,8 @@ export async function create(req: Request, res: Response) {
   const item: any = {
     id,
     is_team,
+    title,
+    description,
     group_name: is_team ? payload.group_name : undefined,
     person_name: !is_team ? payload.person_name : undefined,
     school_name: payload.school_name,
@@ -114,6 +126,9 @@ export async function update(req: Request, res: Response) {
   const id = req.params.id;
   if (!id) return res.status(400).json({ error: "id required" });
   const patch = req.body;
+  if (typeof patch.title === "string") patch.title = patch.title.trim();
+  if (typeof patch.description === "string")
+    patch.description = patch.description.trim();
   const r = await hw.updateHomework(id, patch as any);
   if (!r) return res.status(404).json({ error: "not found" });
   res.json(r);

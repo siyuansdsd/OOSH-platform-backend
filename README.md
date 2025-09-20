@@ -161,6 +161,8 @@ curl -X POST https://your-api.example.com/api/verify/verify-code \
 如果你需要我把这段文档放在 `README.md` 的特定位置或生成 API 文档页面（例如 docs site），告诉我要放在哪儿我会继续操作。
   - `filenames` (string[]) — multiple filenames
   - `files` (array of objects) — multiple files with per-file contentType: [{ filename, contentType }]
+  - `title` (string, required) — homework title displayed to users.
+  - `description` (string, required) — short project description.
   - optional: `schoolName`, `groupName`, `is_team`, `person_name`, `members` (when creating draft homework)
 - Response (JSON):
   - Single-file request returns: `{ uploadUrl, fileUrl, key, expiresIn, homeworkId }`
@@ -179,6 +181,8 @@ Content-Type: application/json
     { "filename": "a.jpg", "contentType": "image/jpeg" },
     { "filename": "b.png", "contentType": "image/png" }
   ],
+  "title": "Science Fair Project",
+  "description": "Showcase of renewable energy prototype with build steps.",
   "schoolName": "Sunrise School",
   "groupName": "Class1A",
   "is_team": true,
@@ -231,6 +235,8 @@ A) JSON presign 流（客户端负责把文件 PUT 到 S3，适合减轻服务�
     { "filename": "a.jpg", "contentType": "image/jpeg" },
     { "filename": "b.png", "contentType": "image/png" }
   ],
+  "title": "Science Fair Project",
+  "description": "Showcase of renewable energy prototype with build steps.",
   "schoolName": "Sunrise School",
   "groupName": "Class1A",
   "is_team": true,
@@ -243,7 +249,7 @@ A) JSON presign 流（客户端负责把文件 PUT 到 S3，适合减轻服务�
 ```bash
 curl -s -X POST "https://your-api.example.com/api/uploads/create-and-presign" \
   -H "Content-Type: application/json" \
-  -d '{"files":[{"filename":"a.jpg","contentType":"image/jpeg"},{"filename":"b.png","contentType":"image/png"}],"schoolName":"Sunrise School","groupName":"Class1A"}'
+  -d '{"files":[{"filename":"a.jpg","contentType":"image/jpeg"},{"filename":"b.png","contentType":"image/png"}],"title":"Science Fair Project","description":"Showcase of renewable energy prototype with build steps.","schoolName":"Sunrise School","groupName":"Class1A"}'
 
 # 响应示例（重要字段）:
 # {
@@ -394,7 +400,7 @@ curl -X POST "https://your-api.example.com/api/uploads/create-and-presign" \
 
 说明与注意点：
 
-- `create-and-presign` 会把 `is_team/groupName/members/schoolName` 写入 draft homework，所以你在后续的 `PUT /api/homeworks/:id` 中可以只附加 `images`/`videos`，也可重复发送团队信息以确保完整性。
+- `create-and-presign` 会把 `title/description/is_team/groupName/members/schoolName` 写入 draft homework，所以你在后续的 `PUT /api/homeworks/:id` 中可以只附加 `images`/`videos`，也可重复发送团队信息以确保完整性。
 - 如果你希望上传成功后自动把 `fileUrl` 写回 homework，可以使用 S3 Events + Lambda：在 S3 对象创建事件中解析 object key（或使用 object metadata 包含 homeworkId），并调用 DynamoDB 更新逻辑。
 - 浏览器直接 PUT 到 S3 时，请确保 S3 的 CORS 配置允许你的前端 origin、PUT 方法和 Content-Type header；否则浏览器会因为 CORS 而失败。
 
@@ -412,13 +418,22 @@ curl -X POST "https://your-api.example.com/api/uploads/create-and-presign" \
 1. POST /api/homeworks
 
 - Purpose: create a homework entry. The server will generate `id` and `created_at`.
-- Request body (JSON) required fields: - `is_team` (boolean) OR allow server to infer based on `members` / `person_name`. - For team homework (`is_team: true`): `group_name` (string) and `members` (string[] non-empty) required. - For personal homework (`is_team: false`): `person_name` (string) required. - `school_name` (string) required. - At least one of `images`, `videos`, `urls` must be present and non-empty arrays.
+- Request body (JSON) required fields:
+  - `title` (string)
+  - `description` (string)
+  - `is_team` (boolean) OR allow server to infer based on `members` / `person_name`
+  - For team homework (`is_team: true`): `group_name` (string) and `members` (string[] non-empty)
+  - For personal homework (`is_team: false`): `person_name` (string)
+  - `school_name` (string)
+  - At least one of `images`, `videos`, `urls` must be present and non-empty arrays
 - Response: created homework object (DynamoDB item)
 
 Example payload:
 
 ```json
 {
+  "title": "Science Fair Project",
+  "description": "Showcase of renewable energy prototype with build steps.",
   "is_team": true,
   "group_name": "Class1A",
   "members": ["Alice", "Bob"],
