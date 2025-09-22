@@ -82,11 +82,11 @@ export async function getUserById(id: string) {
 }
 
 export async function getUserByUsername(username: string) {
-  // scan for username - for small user base acceptable; for prod add a GSI on username
   const r = await ddb
-    .scan({
+    .query({
       TableName: TABLE,
-      FilterExpression: "username = :u",
+      IndexName: process.env.USER_USERNAME_INDEX || "UserByUsername",
+      KeyConditionExpression: "username = :u",
       ExpressionAttributeValues: { ":u": username },
       Limit: 1,
     })
@@ -96,9 +96,10 @@ export async function getUserByUsername(username: string) {
 
 export async function getUserByEmail(email: string) {
   const r = await ddb
-    .scan({
+    .query({
       TableName: TABLE,
-      FilterExpression: "email = :e",
+      IndexName: process.env.USER_EMAIL_INDEX || "UserByEmail",
+      KeyConditionExpression: "email = :e",
       ExpressionAttributeValues: { ":e": email },
       Limit: 1,
     })
