@@ -1,9 +1,29 @@
-import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import nodemailer from "nodemailer";
 
-const region = (process.env.SES_REGION ||
-  process.env.AWS_REGION ||
-  "ap-southeast-2") as string;
-const client = new SESClient({ region });
+const smtpHost = process.env.SMTP_HOST;
+const smtpPort = process.env.SMTP_PORT
+  ? Number(process.env.SMTP_PORT)
+  : 587;
+const smtpUser = process.env.SMTP_USER;
+const smtpPass = process.env.SMTP_PASS;
+const smtpSecure = process.env.SMTP_SECURE
+  ? process.env.SMTP_SECURE === "true"
+  : smtpPort === 465 || smtpPort === 2465;
+
+type NodemailerTransporter = import("nodemailer").Transporter;
+
+let smtpTransporter: NodemailerTransporter | null = null;
+if (smtpHost && smtpPort && smtpUser && typeof smtpPass === "string") {
+  smtpTransporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+}
 
 function maskEmail(e?: string | undefined) {
   if (!e) return undefined;
@@ -21,54 +41,46 @@ function maskEmail(e?: string | undefined) {
  */
 export async function sendVerificationEmail(to: string, code: string) {
   const from = process.env.SES_FROM;
+  if (!from) {
+    throw new Error("SES_FROM not configured");
+  }
   const subject = "Your verification code";
   const bodyHtml = `<p>Your verification code is <strong>${code}</strong>. It is valid for 5 minutes.</p>`;
   const bodyText = `Your verification code is ${code}. It is valid for 5 minutes.`;
 
-  const params = {
-    Destination: { ToAddresses: [to] },
-    Message: {
-      Body: {
-        Html: { Data: bodyHtml },
-        Text: { Data: bodyText },
-      },
-      Subject: { Data: subject },
-    },
-    Source: from,
-  };
+  if (!smtpTransporter) {
+    throw new Error("SMTP configuration missing: please set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS");
+  }
 
-  const cmd = new SendEmailCommand(params);
-
-  // 记录尝试（不输出完整邮箱/凭证）
   try {
     console.info("[SES] sendVerificationEmail attempt", {
       to: maskEmail(to),
       from: maskEmail(from),
-      region,
-      action: "sendVerificationEmail",
+      method: "smtp",
+      host: smtpHost,
     });
 
-    const resp = await client.send(cmd);
+    const info = await smtpTransporter.sendMail({
+      from,
+      to,
+      subject,
+      text: bodyText,
+      html: bodyHtml,
+    });
 
-    // 成功日志，包含 MessageId（非敏感）
     console.info("[SES] sendVerificationEmail success", {
       to: maskEmail(to),
-      messageId: (resp as any)?.MessageId,
+      method: "smtp",
+      messageId: (info as any)?.messageId,
+      response: (info as any)?.response,
     });
 
-    return resp;
+    return info;
   } catch (err: any) {
-    // 失败日志：记录简要错误信息与 SDK metadata 以便排查，但避免记录秘密
     console.error("[SES] sendVerificationEmail error", {
       to: maskEmail(to),
+      method: "smtp",
       errorMessage: err?.message ?? String(err),
-      // $metadata 可能包含请求 id / status 等有用信息
-      metadata: err?.$metadata
-        ? {
-            httpStatusCode: err.$metadata?.httpStatusCode,
-            requestId: err.$metadata?.requestId,
-          }
-        : undefined,
     });
     throw err;
   }

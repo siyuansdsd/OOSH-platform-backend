@@ -59,12 +59,12 @@ Base path: `/api`
 - 流程：客户端请求 `POST /api/verify/send-code` -> 服务器生成 6 位数字验证码并写入 Redis（键 `verify:<email>`），调用 SES 发送邮件 -> 用户收到邮件并将 code 发到 `POST /api/verify/verify-code` 校验 -> 校验通过后删除 Redis 中的验证码。
 
 ### 新增依赖
-- Node.js 包：`redis`（或 `ioredis` 用于 cluster）、`@aws-sdk/client-ses`、`uuid`（已用于示例，但不是必须）。
+- Node.js 包：`redis`（或 `ioredis` 用于 cluster）、`nodemailer`、`uuid`（已用于示例，但不是必须）。
 
 安装示例：
 ```
 
-npm install redis @aws-sdk/client-ses uuid
+npm install redis nodemailer uuid
 
 ```
 
@@ -77,6 +77,7 @@ npm install redis @aws-sdk/client-ses uuid
 - REDIS_CLUSTER：true/false（可选，集群模式）
 - AWS_REGION / SES_REGION：AWS 区域，例如 `ap-southeast-2`
 - SES_FROM：邮件发件人（需在 SES 验证的邮箱或域，例如 `<SES_VERIFIED_FROM_EMAIL>`）
+- SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS：填写 SES SMTP Interface（或其他 SMTP 服务）的主机、端口、用户名、密码。系统现已强制走 SMTP 发送验证码；若未设置这些变量将直接报错。使用端口 587 可自动启用 STARTTLS，若使用 465/2465 记得将 `SMTP_SECURE=true`。
 
 示例 `.env` 片段（请用你的实际值替换占位符；不要在仓库中提交真实凭证或终端节点）：
 ```
@@ -89,6 +90,10 @@ REDIS_TLS=true
 REDIS_CLUSTER=false
 AWS_REGION=<YOUR_AWS_REGION>
 SES_FROM=<SES_VERIFIED_FROM_EMAIL>
+SMTP_HOST=email-smtp.<YOUR_REGION>.amazonaws.com
+SMTP_PORT=587
+SMTP_USER=<SES_SMTP_USER>
+SMTP_PASS=<SES_SMTP_PASSWORD>
 
 ```
 
