@@ -2,7 +2,7 @@ import crypto from "crypto";
 import type { UserItem } from "../models/user.js";
 import { updateUser, getUserById } from "../models/user.js";
 
-const DEFAULT_TTL_DAYS = Number(process.env.REFRESH_TOKEN_TTL_DAYS || 30);
+const DEFAULT_TTL_DAYS = Number(process.env.REFRESH_TOKEN_TTL_DAYS || 3);
 const REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
 
 function hash(value: string) {

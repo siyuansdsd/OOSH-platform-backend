@@ -12,7 +12,7 @@ Set the following environment variables (in `.env` for local dev, or in Lambda e
 - `NODE_ENV` - (optional) `development`/`production`.
 - `PORT` - (local dev) port to run express server.
 - `JWT_SECRET` - secret for signing access tokens (default `dev-secret`).
-- `JWT_EXPIRES_IN` - access token lifetime (default `3d`).
+- `JWT_EXPIRES_IN` - access token lifetime (default `1d`).
 - `JWT_REFRESH_SECRET` - optional extra secret for refresh token hashing (falls back to `JWT_SECRET`).
 - `REFRESH_TOKEN_TTL_DAYS` - refresh token lifetime in days (default `30`).
 
@@ -548,7 +548,7 @@ If you want, I can also add a short frontend JS snippet that demonstrates the fu
 - `POST /api/users/login` —
   - User：`{ email, code }`（邮箱验证码登录）。
   - StudentPublic（临时账号）：`{ username, password }`。
-  返回 `{ token, expiresIn: "3d", refreshToken, refreshTokenExpiresAt, user }`。
+  返回 `{ token, expiresIn: "1d", refreshToken, refreshTokenExpiresAt, user }`。
 - `POST /api/users/admin-login` — 管理后台登录，仅允许 Admin 与 Editor；请求体 `{ username, password, code }`，返回同上且 `user.scope = "admin"`。
 - `POST /api/users/refresh` — 使用 refresh token 换取新的 access token。请求体：`{ refreshToken, scope? }`，`scope` 可选为 `admin`（仅 Admin/Editor 可用）。
 - `POST /api/users/logout` — 需携带 Bearer Token；清除当前账户的 refresh token，并通过自增 token_version 立刻失效现有 access token。
@@ -559,7 +559,7 @@ If you want, I can also add a short frontend JS snippet that demonstrates the fu
 - `DELETE /api/users/:id` — Admin 专用：删除用户。
 - `POST /api/users/:id/block` — Admin 专用：block/unblock 账户。
 
-> Access token 默认有效期 3 天（可通过 `JWT_EXPIRES_IN` 调整）。Refresh token 默认 30 天（`REFRESH_TOKEN_TTL_DAYS` 可调）。Admin 账户在任意登录/验证码接口连续输错 5 次密码会被自动封禁；成功登录或验证后失败次数会被重置为 0。
+> Access token 默认有效期 1 天（可通过 `JWT_EXPIRES_IN` 调整）。Refresh token 默认 3 天（`REFRESH_TOKEN_TTL_DAYS` 可调）。Admin 账户在任意登录/验证码接口连续输错 5 次密码会被自动封禁；成功登录或验证后失败次数会被重置为 0。
 
 鉴权规则（简表）：
 
@@ -603,7 +603,7 @@ curl -s -X POST "https://your-api.example.com/api/users/login" \
 
 # 响应示例: {
 #   "token": "ey...",
-#   "expiresIn": "3d",
+#   "expiresIn": "1d",
 #   "refreshToken": "userId.4c0f...",
 #   "refreshTokenExpiresAt": "2025-10-01T12:00:00.000Z",
 #   "user": { "id": "...", "role": "Admin" }
