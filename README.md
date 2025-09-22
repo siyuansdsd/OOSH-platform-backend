@@ -12,7 +12,7 @@ Set the following environment variables (in `.env` for local dev, or in Lambda e
 - `NODE_ENV` - (optional) `development`/`production`.
 - `PORT` - (local dev) port to run express server.
 - `JWT_SECRET` - secret for signing access tokens (default `dev-secret`).
-- `JWT_EXPIRES_IN` - access token lifetime (default `15m`).
+- `JWT_EXPIRES_IN` - access token lifetime (default `3d`).
 - `JWT_REFRESH_SECRET` - optional extra secret for refresh token hashing (falls back to `JWT_SECRET`).
 - `REFRESH_TOKEN_TTL_DAYS` - refresh token lifetime in days (default `30`).
 
@@ -115,24 +115,34 @@ SMTP_PASS=<SES_SMTP_PASSWORD>
 （可将 Resource 进一步限制为特定 identity ARN）
 
 ### HTTP API
-1) 发送验证码
+- 1) 发送验证码
 - 路径：POST /api/verify/send-code
-- 鉴权：请求体必须包含正确的邮箱 + 密码；后端会比对密码并在 Admin 账户连续输错 5 次时自动封禁。
-- 请求体（JSON）：{ "email": "user@example.com", "password": "PlainPassword" }
+- 行为：
+  - 普通用户（role = `User`）：只需提供邮箱，若存在即发送验证码。
+  - Admin/Editor：必须提供邮箱 + 密码，密码校验失败会累计失败次数并可能封禁。
+  - StudentPublic：不支持验证码登录，接口会返回 403。
+- 请求体示例：
+  - 普通用户：`{ "email": "user@example.com" }`
+  - Admin/Editor：`{ "email": "admin@example.com", "password": "PlainPassword" }`
 - 返回：
   - 200 { "ok": true } — 发送成功
-  - 400 { "error": "email and password required" } — 参数错误
-  - 401 { "error": "invalid credentials" } — 密码错误
-  - 403 { "error": "account blocked" } — 管理员账户因失败次数过多被锁定
+  - 400 { "error": "email required" } / { "error": "password required" }
+  - 401 { "error": "invalid credentials" }
+  - 403 { "error": "account blocked" } 或 `code not supported for this account`
   - 500 { "error": "send failed" } — 服务器/SES/Redis 错误
 
-2) 校验验证码
+- 2) 校验验证码
 - 路径：POST /api/verify/verify-code
-- 鉴权：同样需要提供正确的邮箱 + 密码，验证通过后才会检查验证码。
-- 请求体（JSON）：{ "email": "user@example.com", "password": "PlainPassword", "code": "123456" }
+- 行为：
+  - 普通用户：提供邮箱 + code 即可校验。
+  - Admin/Editor：需邮箱 + 密码 + code。
+  - StudentPublic：同样不支持。
+- 请求体示例：
+  - 普通用户：`{ "email": "user@example.com", "code": "123456" }`
+  - Admin/Editor：`{ "email": "admin@example.com", "password": "PlainPassword", "code": "123456" }`
 - 返回：
   - 200 { "ok": true } — 验证通过
-  - 400 { "error": "email, password and code required" } — 参数缺失
+  - 400 { "error": "email and code required" } / { "error": "password required" }
   - 401 { "error": "invalid credentials" }
   - 403 { "error": "account blocked" }
   - 400 { "error": "invalid" } — 验证码不匹配或已过期
@@ -143,11 +153,11 @@ SMTP_PASS=<SES_SMTP_PASSWORD>
 
 curl -X POST https://your-api.example.com/api/verify/send-code \
  -H "Content-Type: application/json" \
- -d '{"email":"you@example.com","password":"PlainPassword"}'
+ -d '{"email":"you@example.com"}'
 
 curl -X POST https://your-api.example.com/api/verify/verify-code \
  -H "Content-Type: application/json" \
- -d '{"email":"you@example.com","password":"PlainPassword","code":"123456"}'
+ -d '{"email":"you@example.com","code":"123456"}'
 
 ````
 
@@ -531,11 +541,14 @@ If you want, I can also add a short frontend JS snippet that demonstrates the fu
 
 主要 API（基于 JWT）:
 
-- `POST /api/users/register` — 注册新账号（只能创建 Editor/User/StudentPublic）。请求体：`{ username, password, display_name?, email?, role? }`。
-- `POST /api/users/login` — 普通登录，所有角色（Admin/Editor/User/StudentPublic）均可使用，返回 `{ token, user }`。
-- `POST /api/users/admin-login` — 管理后台登录，仅允许 Admin 与 Editor；返回 payload 会带 `scope: "admin"`。
+- `POST /api/users/register` — 注册 Editor/User/StudentPublic。User 角色可省略密码，其他角色必须提供。
+- `POST /api/users/login` —
+  - User：`{ email, code }`（邮箱验证码登录）。
+  - StudentPublic（临时账号）：`{ username, password }`。
+  返回 `{ token, expiresIn: "3d", refreshToken, refreshTokenExpiresAt, user }`。
+- `POST /api/users/admin-login` — 管理后台登录，仅允许 Admin 与 Editor；请求体 `{ username, password, code }`，返回同上且 `user.scope = "admin"`。
 - `POST /api/users/refresh` — 使用 refresh token 换取新的 access token。请求体：`{ refreshToken, scope? }`，`scope` 可选为 `admin`（仅 Admin/Editor 可用）。
-- `POST /api/users/logout` — 需携带 Bearer Token；清除当前账户的 refresh token（access token 仍会在 15 分钟内自然过期）。
+- `POST /api/users/logout` — 需携带 Bearer Token；清除当前账户的 refresh token，并通过自增 token_version 立刻失效现有 access token。
 - `POST /api/users` — Admin 专用：创建任意角色（包括 Admin）。需要 Authorization: Bearer <token>。
 - `GET /api/users` — Admin 专用：列出所有用户。
 - `GET /api/users/:id` — Admin 专用：查看用户详情。
@@ -543,7 +556,7 @@ If you want, I can also add a short frontend JS snippet that demonstrates the fu
 - `DELETE /api/users/:id` — Admin 专用：删除用户。
 - `POST /api/users/:id/block` — Admin 专用：block/unblock 账户。
 
-> Access token 默认有效期 15 分钟（可通过 `JWT_EXPIRES_IN` 调整）。Refresh token 默认 30 天（`REFRESH_TOKEN_TTL_DAYS` 可调）。Admin 账户在任意登录/验证码接口连续输错 5 次密码会被自动封禁；成功登录或验证后失败次数会被重置为 0。
+> Access token 默认有效期 3 天（可通过 `JWT_EXPIRES_IN` 调整）。Refresh token 默认 30 天（`REFRESH_TOKEN_TTL_DAYS` 可调）。Admin 账户在任意登录/验证码接口连续输错 5 次密码会被自动封禁；成功登录或验证后失败次数会被重置为 0。
 
 鉴权规则（简表）：
 
@@ -587,7 +600,7 @@ curl -s -X POST "https://your-api.example.com/api/users/login" \
 
 # 响应示例: {
 #   "token": "ey...",
-#   "expiresIn": "15m",
+#   "expiresIn": "3d",
 #   "refreshToken": "userId.4c0f...",
 #   "refreshTokenExpiresAt": "2025-10-01T12:00:00.000Z",
 #   "user": { "id": "...", "role": "Admin" }

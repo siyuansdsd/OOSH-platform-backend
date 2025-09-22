@@ -2,7 +2,7 @@ import jwt from "jsonwebtoken";
 import type { Secret, SignOptions } from "jsonwebtoken";
 
 const SECRET = (process.env.JWT_SECRET || "dev-secret") as Secret;
-const EXPIRES_IN = process.env.JWT_EXPIRES_IN || "15m";
+const EXPIRES_IN = process.env.JWT_EXPIRES_IN || "3d";
 
 export function signToken(payload: string | object) {
   const opts: SignOptions = { expiresIn: EXPIRES_IN as any };

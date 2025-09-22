@@ -73,13 +73,6 @@ export async function sendVerificationEmail(to: string, code: string) {
         </td>
       </tr>
       <tr>
-        <td align="center" style="padding:12px 40px 32px;">
-          <a href="https://maxhacker.io/verify?code=${code}" style="display:inline-block;padding:14px 32px;font-size:17px;font-weight:600;border-radius:10px;background:#0a58ff;color:#ffffff;text-decoration:none;">
-            Copy
-          </a>
-        </td>
-      </tr>
-      <tr>
         <td style="padding:0 40px 36px;font-size:15px;line-height:1.6;color:#4b5565;">
           If you did not request this code, you can safely ignore this email.
           <br /><br />
@@ -107,7 +100,10 @@ export async function sendVerificationEmail(to: string, code: string) {
     });
 
     const info = await smtpTransporter.sendMail({
-      from,
+      from: {
+        name: "MaxHacker IT Team",
+        address: from,
+      },
       to,
       subject,
       text: bodyText,

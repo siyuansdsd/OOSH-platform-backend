@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import * as userModel from "../models/user.js";
 import { signToken } from "../utils/jwt.js";
 import { recordFailedAttempt, resetFailedAttempts } from "../utils/authAttempts.js";
+import { redisGet, redisDel } from "../utils/redisClient.js";
 import {
   generateRefreshToken,
   parseRefreshToken,
@@ -13,24 +14,29 @@ const SALT_ROUNDS = 10;
 
 export async function register(req: Request, res: Response) {
   const { username, password, display_name, email, role } = req.body || {};
-  if (!username || !password)
-    return res.status(400).json({ error: "username and password required" });
+  if (!username)
+    return res.status(400).json({ error: "username required" });
   // only allow creating Editor or User or StudentPublic via this endpoint
   const allowedRoles = ["Editor", "User", "StudentPublic"];
   const finalRole = allowedRoles.includes(role) ? role : "User";
+
+  if (finalRole !== "User" && !password)
+    return res.status(400).json({ error: "password required for this role" });
 
   // check existing
   const existing = await userModel.getUserByUsername(username);
   if (existing) return res.status(409).json({ error: "username exists" });
 
-  const hash = await bcrypt.hash(password, SALT_ROUNDS);
-  const u = await userModel.createUser({
+  const patch: any = {
     username,
     display_name,
     email,
-    password_hash: hash,
     role: finalRole,
-  });
+  };
+  if (password) {
+    patch.password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+  }
+  const u = await userModel.createUser(patch);
   // do not return password hash
   delete (u as any).password_hash;
   res.status(201).json(u);
@@ -58,30 +64,59 @@ export async function adminCreate(req: Request, res: Response) {
 }
 
 export async function login(req: Request, res: Response) {
-  const { username, password } = req.body || {};
-  if (!username || !password)
-    return res.status(400).json({ error: "username and password required" });
-  const user = await userModel.getUserByUsername(username);
-  if (!user) return res.status(401).json({ error: "invalid credentials" });
-  if (user.blocked) return res.status(403).json({ error: "account blocked" });
-  const ok = user.password_hash
-    ? await bcrypt.compare(password, user.password_hash)
-    : false;
-  if (!ok) {
-    await recordFailedAttempt(user as any);
-    if (user.blocked)
+  const { username, password, email, code } = req.body || {};
+
+  if (email && code && !username && !password) {
+    // email + code login for regular users
+    const userByEmail = await userModel.getUserByEmail(String(email));
+    if (!userByEmail)
+      return res.status(401).json({ error: "invalid credentials" });
+    if (userByEmail.blocked)
       return res.status(403).json({ error: "account blocked" });
-    return res.status(401).json({ error: "invalid credentials" });
+    if (userByEmail.role !== "User")
+      return res.status(403).json({ error: "forbidden" });
+
+    const key = `verify:${email}`;
+    const storedCode = await redisGet(key);
+    if (!storedCode || storedCode !== code) {
+      return res.status(400).json({ error: "invalid code" });
+    }
+    await redisDel(key);
+
+    await resetFailedAttempts(userByEmail as any);
+    return issueTokensForUser(userByEmail, "default", res);
   }
 
-  await resetFailedAttempts(user as any);
+  if (username && password && !code) {
+    const user = await userModel.getUserByUsername(username);
+    if (!user) return res.status(401).json({ error: "invalid credentials" });
+    if (user.blocked) return res.status(403).json({ error: "account blocked" });
+    if (user.role !== "StudentPublic")
+      return res.status(403).json({ error: "forbidden" });
+    const ok = user.password_hash
+      ? await bcrypt.compare(password, user.password_hash)
+      : false;
+    if (!ok)
+      return res.status(401).json({ error: "invalid credentials" });
 
+    await resetFailedAttempts(user as any);
+    return issueTokensForUser(user, "default", res);
+  }
+
+  return res.status(400).json({ error: "unsupported login payload" });
+}
+
+async function issueTokensForUser(
+  user: any,
+  scope: "default" | "admin",
+  res: Response
+) {
   const accessToken = signToken({
     id: user.id,
     username: user.username,
     role: user.role,
     token_version: user.token_version || 0,
-    scope: "default",
+    scope,
   });
 
   const { token: refreshToken, tokenHash, expiresAt } = generateRefreshToken(
@@ -98,7 +133,7 @@ export async function login(req: Request, res: Response) {
 
   res.json({
     token: accessToken,
-    expiresIn: process.env.JWT_EXPIRES_IN || "15m",
+    expiresIn: process.env.JWT_EXPIRES_IN || "3d",
     refreshToken,
     refreshTokenExpiresAt: expiresAt,
     user: {
@@ -108,14 +143,17 @@ export async function login(req: Request, res: Response) {
       display_name: user.display_name,
       email: user.email,
       token_version: user.token_version || 0,
+      scope,
     },
   });
 }
 
 export async function adminLogin(req: Request, res: Response) {
-  const { username, password } = req.body || {};
-  if (!username || !password)
-    return res.status(400).json({ error: "username and password required" });
+  const { username, password, code } = req.body || {};
+  if (!username || !password || !code)
+    return res
+      .status(400)
+      .json({ error: "username, password and code required" });
   const user = await userModel.getUserByUsername(username);
   if (!user)
     return res.status(401).json({ error: "invalid credentials" });
@@ -136,41 +174,16 @@ export async function adminLogin(req: Request, res: Response) {
 
   await resetFailedAttempts(user as any);
 
-  const accessToken = signToken({
-    id: user.id,
-    username: user.username,
-    role: user.role,
-    token_version: user.token_version || 0,
-    scope: "admin",
-  });
+  const email = user.email;
+  if (!email) return res.status(400).json({ error: "email not configured" });
+  const key = `verify:${email}`;
+  const storedCode = await redisGet(key);
+  if (!storedCode || storedCode !== code) {
+    return res.status(400).json({ error: "invalid code" });
+  }
+  await redisDel(key);
 
-  const { token: refreshToken, tokenHash, expiresAt } = generateRefreshToken(
-    user.id
-  );
-
-  await userModel.updateUser(user.id, {
-    last_login: new Date().toISOString(),
-    failed_login_attempts: 0,
-    last_failed_login_at: null,
-    refresh_token_hash: tokenHash,
-    refresh_token_expires_at: expiresAt,
-  });
-
-  res.json({
-    token: accessToken,
-    expiresIn: process.env.JWT_EXPIRES_IN || "15m",
-    refreshToken,
-    refreshTokenExpiresAt: expiresAt,
-    user: {
-      id: user.id,
-      username: user.username,
-      role: user.role,
-      display_name: user.display_name,
-      email: user.email,
-      token_version: user.token_version || 0,
-      scope: "admin",
-    },
-  });
+  return issueTokensForUser(user, "admin", res);
 }
 
 // Admin: increment token_version to revoke existing tokens for a user
@@ -230,7 +243,7 @@ export async function refreshToken(req: Request, res: Response) {
 
   res.json({
     token: accessToken,
-    expiresIn: process.env.JWT_EXPIRES_IN || "15m",
+    expiresIn: process.env.JWT_EXPIRES_IN || "3d",
     refreshToken: newRefreshToken,
     refreshTokenExpiresAt: expiresAt,
     user: {
@@ -248,11 +261,13 @@ export async function refreshToken(req: Request, res: Response) {
 export async function logout(req: Request, res: Response) {
   const authUser = (req as any).authUser;
   if (!authUser) return res.status(401).json({ error: "unauthorized" });
+  const nextVersion = (authUser.token_version || 0) + 1;
   await userModel.updateUser(authUser.id, {
     refresh_token_hash: null,
     refresh_token_expires_at: null,
+    token_version: nextVersion,
   });
-  res.json({ ok: true });
+  res.json({ ok: true, token_version: nextVersion });
 }
 
 export async function list(req: Request, res: Response) {
