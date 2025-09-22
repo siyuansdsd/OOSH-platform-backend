@@ -1,9 +1,7 @@
 import nodemailer from "nodemailer";
 
 const smtpHost = process.env.SMTP_HOST;
-const smtpPort = process.env.SMTP_PORT
-  ? Number(process.env.SMTP_PORT)
-  : 587;
+const smtpPort = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587;
 const smtpUser = process.env.SMTP_USER;
 const smtpPass = process.env.SMTP_PASS;
 const smtpSecure = process.env.SMTP_SECURE
@@ -77,7 +75,7 @@ export async function sendVerificationEmail(to: string, code: string) {
       <tr>
         <td align="center" style="padding:12px 40px 32px;">
           <a href="https://maxhacker.io/verify?code=${code}" style="display:inline-block;padding:14px 32px;font-size:17px;font-weight:600;border-radius:10px;background:#0a58ff;color:#ffffff;text-decoration:none;">
-            复制验证码
+            Copy
           </a>
         </td>
       </tr>
@@ -95,7 +93,9 @@ export async function sendVerificationEmail(to: string, code: string) {
   const bodyText = `Your MaxHacker verification code is ${code}. It expires in 5 minutes. If you didn't request it, ignore this email. -- MaxHacker IT Team`;
 
   if (!smtpTransporter) {
-    throw new Error("SMTP configuration missing: please set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS");
+    throw new Error(
+      "SMTP configuration missing: please set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS"
+    );
   }
 
   try {
