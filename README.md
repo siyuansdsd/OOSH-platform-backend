@@ -11,6 +11,10 @@ Set the following environment variables (in `.env` for local dev, or in Lambda e
 - `DYNAMO_TABLE` - DynamoDB table name (default: `homeworks`).
 - `NODE_ENV` - (optional) `development`/`production`.
 - `PORT` - (local dev) port to run express server.
+- `JWT_SECRET` - secret for signing access tokens (default `dev-secret`).
+- `JWT_EXPIRES_IN` - access token lifetime (default `15m`).
+- `JWT_REFRESH_SECRET` - optional extra secret for refresh token hashing (falls back to `JWT_SECRET`).
+- `REFRESH_TOKEN_TTL_DAYS` - refresh token lifetime in days (default `30`).
 
 ## IAM permissions
 
@@ -31,6 +35,7 @@ Base path: `/api`
 
 1. POST /api/uploads/presign
 
+- Auth: Bearer token required. Allowed roles: Admin, Editor, StudentPublic.
 - Purpose: get a presigned PUT URL for uploading a single file to S3.
 - Request body (JSON): - `homeworkId` (string) - used to build the S3 key path (optional but recommended) - `filename` (string) - required - `contentType` (string) - optional - `schoolName` (string) - optional (used in key) - `groupName` (string) - optional (used in key)
 - Response (JSON): - `uploadUrl` (string) - signed URL for PUT - `fileUrl` (string) - public S3 URL for reading - `key` (string) - S3 object key - `expiresIn` (number)
@@ -47,6 +52,7 @@ Base path: `/api`
 
 2. POST /api/uploads/create-and-presign
 
+- Auth: Bearer token required (Admin, Editor, StudentPublic).
 - Purpose: create a homework draft server-side (server generates id) and return one or more presigned PUT URLs in one call. This endpoint is backward-compatible: it accepts a single file (old form) or multiple files (new form) and returns either a single presign or an array of presigns.
 - Request body (JSON): supports three input shapes (priority order):
 
@@ -111,19 +117,25 @@ SMTP_PASS=<SES_SMTP_PASSWORD>
 ### HTTP API
 1) 发送验证码
 - 路径：POST /api/verify/send-code
-- 请求体（JSON）：{ "email": "user@example.com" }
+- 鉴权：请求体必须包含正确的邮箱 + 密码；后端会比对密码并在 Admin 账户连续输错 5 次时自动封禁。
+- 请求体（JSON）：{ "email": "user@example.com", "password": "PlainPassword" }
 - 返回：
   - 200 { "ok": true } — 发送成功
-  - 400 { "error": "email required" } — 参数错误
+  - 400 { "error": "email and password required" } — 参数错误
+  - 401 { "error": "invalid credentials" } — 密码错误
+  - 403 { "error": "account blocked" } — 管理员账户因失败次数过多被锁定
   - 500 { "error": "send failed" } — 服务器/SES/Redis 错误
 
 2) 校验验证码
 - 路径：POST /api/verify/verify-code
-- 请求体（JSON）：{ "email": "user@example.com", "code": "123456" }
+- 鉴权：同样需要提供正确的邮箱 + 密码，验证通过后才会检查验证码。
+- 请求体（JSON）：{ "email": "user@example.com", "password": "PlainPassword", "code": "123456" }
 - 返回：
   - 200 { "ok": true } — 验证通过
-  - 400 { "error": "invalid" } — 验证失败（不匹配或已过期）
-  - 400 { "error": "email and code required" } — 参数缺失
+  - 400 { "error": "email, password and code required" } — 参数缺失
+  - 401 { "error": "invalid credentials" }
+  - 403 { "error": "account blocked" }
+  - 400 { "error": "invalid" } — 验证码不匹配或已过期
   - 500 { "error": "verify failed" } — 内部错误
 
 示例 curl：
@@ -131,11 +143,11 @@ SMTP_PASS=<SES_SMTP_PASSWORD>
 
 curl -X POST https://your-api.example.com/api/verify/send-code \
  -H "Content-Type: application/json" \
- -d '{"email":"you@example.com"}'
+ -d '{"email":"you@example.com","password":"PlainPassword"}'
 
 curl -X POST https://your-api.example.com/api/verify/verify-code \
  -H "Content-Type: application/json" \
- -d '{"email":"you@example.com","code":"123456"}'
+ -d '{"email":"you@example.com","password":"PlainPassword","code":"123456"}'
 
 ````
 
@@ -411,6 +423,7 @@ curl -X POST "https://your-api.example.com/api/uploads/create-and-presign" \
 
 3. POST /api/uploads/upload
 
+- Auth: Bearer token required (Admin, Editor, StudentPublic).
 - Purpose: server-side upload + optional compression (image/video).
 - Request: multipart/form-data - `file` (binary) - required - `homeworkId`, `filename`, `schoolName`, `groupName` - form fields (optional but used for key)
 - Response (JSON): `{ key, fileUrl, location, compressed }`
@@ -423,6 +436,7 @@ curl -X POST "https://your-api.example.com/api/uploads/create-and-presign" \
 1. POST /api/homeworks
 
 - Purpose: create a homework entry. The server will generate `id` and `created_at`.
+- Auth: Bearer token required. Roles: Admin, Editor, StudentPublic.
 - Request body (JSON) required fields:
   - `title` (string)
   - `description` (string)
@@ -450,28 +464,32 @@ Example payload:
 2. PUT /api/homeworks/:id
 
 - Purpose: update homework. Accepts partial patch. Model will validate merged result.
+- Auth: Bearer token required. Roles: Admin, Editor.
 - Use to add uploaded file URLs to images/videos/urls arrays.
 
 3. GET /api/homeworks
 
 - Purpose: list recent homeworks (uses `homework_index` GSI). Query param: `limit`.
+- Auth: Bearer token required. Roles: Admin, Editor, StudentPublic.
 
 4. GET /api/homeworks/:id
 
 - Purpose: get a single homework by id.
+- Auth: Bearer token required (all logged-in roles).
 
 5. DELETE /api/homeworks/:id
 
 - Purpose: delete homework item.
+- Auth: Bearer token required. Roles: Admin, Editor.
 
 6. Additional listing endpoints
 
-- GET /api/homeworks/person/:person -> list homeworks for a person (requires `person_index` GSI)
-- GET /api/homeworks/group/:group -> list homeworks for a group/team (requires `group_index` GSI)
-- GET /api/homeworks/school/:school -> list homeworks for a school (requires `school_index` GSI)
-- GET /api/homeworks/has/images -> list homeworks with images (requires `HasImageIndex` GSI)
-- GET /api/homeworks/has/videos -> list homeworks with videos (requires `HasVideosIndex` GSI)
-- GET /api/homeworks/has/urls -> list homeworks with urls (requires `HasUrlsIndex` GSI)
+- GET /api/homeworks/person/:person -> list homeworks for a person (requires `person_index` GSI). Auth roles: Admin, Editor, StudentPublic.
+- GET /api/homeworks/group/:group -> list homeworks for a group/team (requires `group_index` GSI). Auth roles: Admin, Editor, StudentPublic.
+- GET /api/homeworks/school/:school -> list homeworks for a school (requires `school_index` GSI). Auth roles: Admin, Editor, StudentPublic.
+- GET /api/homeworks/has/images -> list homeworks with images (requires `HasImageIndex` GSI). Auth roles: Admin, Editor, StudentPublic.
+- GET /api/homeworks/has/videos -> list homeworks with videos (requires `HasVideosIndex` GSI). Auth roles: Admin, Editor, StudentPublic.
+- GET /api/homeworks/has/urls -> list homeworks with urls (requires `HasUrlsIndex` GSI). Auth roles: Admin, Editor, StudentPublic.
 
 All list endpoints accept optional `limit` query parameter (default 100).
 
@@ -514,13 +532,18 @@ If you want, I can also add a short frontend JS snippet that demonstrates the fu
 主要 API（基于 JWT）:
 
 - `POST /api/users/register` — 注册新账号（只能创建 Editor/User/StudentPublic）。请求体：`{ username, password, display_name?, email?, role? }`。
-- `POST /api/users/login` — 登录，返回 `{ token, user }`。
+- `POST /api/users/login` — 普通登录，所有角色（Admin/Editor/User/StudentPublic）均可使用，返回 `{ token, user }`。
+- `POST /api/users/admin-login` — 管理后台登录，仅允许 Admin 与 Editor；返回 payload 会带 `scope: "admin"`。
+- `POST /api/users/refresh` — 使用 refresh token 换取新的 access token。请求体：`{ refreshToken, scope? }`，`scope` 可选为 `admin`（仅 Admin/Editor 可用）。
+- `POST /api/users/logout` — 需携带 Bearer Token；清除当前账户的 refresh token（access token 仍会在 15 分钟内自然过期）。
 - `POST /api/users` — Admin 专用：创建任意角色（包括 Admin）。需要 Authorization: Bearer <token>。
 - `GET /api/users` — Admin 专用：列出所有用户。
 - `GET /api/users/:id` — Admin 专用：查看用户详情。
 - `PUT /api/users/:id` — Admin 专用：更新用户（可改 role、blocked 等）。
 - `DELETE /api/users/:id` — Admin 专用：删除用户。
 - `POST /api/users/:id/block` — Admin 专用：block/unblock 账户。
+
+> Access token 默认有效期 15 分钟（可通过 `JWT_EXPIRES_IN` 调整）。Refresh token 默认 30 天（`REFRESH_TOKEN_TTL_DAYS` 可调）。Admin 账户在任意登录/验证码接口连续输错 5 次密码会被自动封禁；成功登录或验证后失败次数会被重置为 0。
 
 鉴权规则（简表）：
 
@@ -562,7 +585,13 @@ curl -s -X POST "https://your-api.example.com/api/users/login" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"secret"}'
 
-# 响应示例: { "token": "ey...", "user": { "id": "...", "role": "Admin" } }
+# 响应示例: {
+#   "token": "ey...",
+#   "expiresIn": "15m",
+#   "refreshToken": "userId.4c0f...",
+#   "refreshTokenExpiresAt": "2025-10-01T12:00:00.000Z",
+#   "user": { "id": "...", "role": "Admin" }
+# }
 ```
 
 2. Admin 踢出某用户（把 token_version +1）

@@ -2,12 +2,33 @@ import type { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
 import { redisSet, redisGet, redisDel } from "../utils/redisClient.js";
 import { sendVerificationEmail } from "../utils/ses.js";
+import bcrypt from "bcryptjs";
+import * as userModel from "../models/user.js";
+import {
+  recordFailedAttempt,
+  resetFailedAttempts,
+} from "../utils/authAttempts.js";
 
 const CODE_TTL = 300; // 5 minutes
 
 export async function sendCode(req: Request, res: Response) {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: "email required" });
+  const { email, password } = req.body || {};
+  if (!email || !password)
+    return res.status(400).json({ error: "email and password required" });
+  const user = await userModel.getUserByEmail(String(email));
+  if (!user) return res.status(401).json({ error: "invalid credentials" });
+  if (user.blocked)
+    return res.status(403).json({ error: "account blocked" });
+  const ok = user.password_hash
+    ? await bcrypt.compare(password, user.password_hash)
+    : false;
+  if (!ok) {
+    await recordFailedAttempt(user as any);
+    if (user.blocked)
+      return res.status(403).json({ error: "account blocked" });
+    return res.status(401).json({ error: "invalid credentials" });
+  }
+  await resetFailedAttempts(user as any);
   const code = Math.floor(100000 + Math.random() * 900000).toString();
   const key = `verify:${email}`;
   try {
@@ -36,9 +57,23 @@ export async function sendCode(req: Request, res: Response) {
 }
 
 export async function verifyCode(req: Request, res: Response) {
-  const { email, code } = req.body;
-  if (!email || !code)
-    return res.status(400).json({ error: "email and code required" });
+  const { email, code, password } = req.body || {};
+  if (!email || !code || !password)
+    return res.status(400).json({ error: "email, password and code required" });
+  const user = await userModel.getUserByEmail(String(email));
+  if (!user) return res.status(401).json({ error: "invalid credentials" });
+  if (user.blocked)
+    return res.status(403).json({ error: "account blocked" });
+  const ok = user.password_hash
+    ? await bcrypt.compare(password, user.password_hash)
+    : false;
+  if (!ok) {
+    await recordFailedAttempt(user as any);
+    if (user.blocked)
+      return res.status(403).json({ error: "account blocked" });
+    return res.status(401).json({ error: "invalid credentials" });
+  }
+  await resetFailedAttempts(user as any);
   const key = `verify:${email}`;
   try {
     const v = await redisGet(key);

@@ -7,6 +7,9 @@ const router = express.Router();
 router.post("/register", ctrl.register); // create Editor/User/StudentPublic
 router.post("/", authMiddleware, requireRole("Admin"), ctrl.adminCreate);
 router.post("/login", ctrl.login);
+router.post("/admin-login", ctrl.adminLogin);
+router.post("/refresh", ctrl.refreshToken);
+router.post("/logout", authMiddleware, ctrl.logout);
 
 // admin routes
 router.use(authMiddleware);

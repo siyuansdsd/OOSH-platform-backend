@@ -5,12 +5,15 @@ import {
   uploadHandler,
 } from "../controller/uploadController.js";
 import { uploadMultiHandler } from "../controller/uploadController.js";
+import { authMiddleware, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 },
 });
+
+router.use(authMiddleware, requireRole("Admin", "Editor", "StudentPublic"));
 
 router.post("/presign", presignHandler);
 // create draft homework + presign for client-side upload

@@ -14,6 +14,10 @@ export type UserItem = {
   token_version?: number;
   created_at: string;
   last_login?: string;
+  failed_login_attempts?: number;
+  last_failed_login_at?: string | null;
+  refresh_token_hash?: string | null;
+  refresh_token_expires_at?: string | null;
   entityType?: string;
   PK?: string;
   SK?: string;
@@ -39,6 +43,22 @@ export async function createUser(user: Partial<UserItem>) {
       typeof user.token_version === "number" ? user.token_version : 0,
     created_at: now,
     last_login: user.last_login,
+    failed_login_attempts:
+      typeof user.failed_login_attempts === "number"
+        ? user.failed_login_attempts
+        : 0,
+    last_failed_login_at:
+      user.last_failed_login_at === undefined
+        ? null
+        : (user.last_failed_login_at as string | null),
+    refresh_token_hash:
+      user.refresh_token_hash === undefined
+        ? null
+        : (user.refresh_token_hash as string | null),
+    refresh_token_expires_at:
+      user.refresh_token_expires_at === undefined
+        ? null
+        : (user.refresh_token_expires_at as string | null),
   };
   item.PK = `USER#${item.id}`;
   item.SK = `META#${item.created_at}`;
@@ -68,6 +88,18 @@ export async function getUserByUsername(username: string) {
       TableName: TABLE,
       FilterExpression: "username = :u",
       ExpressionAttributeValues: { ":u": username },
+      Limit: 1,
+    })
+    .promise();
+  return (r.Items && r.Items[0]) || null;
+}
+
+export async function getUserByEmail(email: string) {
+  const r = await ddb
+    .scan({
+      TableName: TABLE,
+      FilterExpression: "email = :e",
+      ExpressionAttributeValues: { ":e": email },
       Limit: 1,
     })
     .promise();

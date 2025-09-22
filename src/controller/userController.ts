@@ -1,6 +1,12 @@
 import type { Request, Response } from "express";
 import * as userModel from "../models/user.js";
-import { signToken, verifyToken } from "../utils/jwt.js";
+import { signToken } from "../utils/jwt.js";
+import { recordFailedAttempt, resetFailedAttempts } from "../utils/authAttempts.js";
+import {
+  generateRefreshToken,
+  parseRefreshToken,
+  isRefreshExpired,
+} from "../utils/refreshTokens.js";
 import bcrypt from "bcryptjs";
 
 const SALT_ROUNDS = 10;
@@ -61,18 +67,40 @@ export async function login(req: Request, res: Response) {
   const ok = user.password_hash
     ? await bcrypt.compare(password, user.password_hash)
     : false;
-  if (!ok) return res.status(401).json({ error: "invalid credentials" });
+  if (!ok) {
+    await recordFailedAttempt(user as any);
+    if (user.blocked)
+      return res.status(403).json({ error: "account blocked" });
+    return res.status(401).json({ error: "invalid credentials" });
+  }
 
-  const token = signToken({
+  await resetFailedAttempts(user as any);
+
+  const accessToken = signToken({
     id: user.id,
     username: user.username,
     role: user.role,
     token_version: user.token_version || 0,
+    scope: "default",
   });
-  // update last_login
-  await userModel.updateUser(user.id, { last_login: new Date().toISOString() });
+
+  const { token: refreshToken, tokenHash, expiresAt } = generateRefreshToken(
+    user.id
+  );
+
+  await userModel.updateUser(user.id, {
+    last_login: new Date().toISOString(),
+    failed_login_attempts: 0,
+    last_failed_login_at: null,
+    refresh_token_hash: tokenHash,
+    refresh_token_expires_at: expiresAt,
+  });
+
   res.json({
-    token,
+    token: accessToken,
+    expiresIn: process.env.JWT_EXPIRES_IN || "15m",
+    refreshToken,
+    refreshTokenExpiresAt: expiresAt,
     user: {
       id: user.id,
       username: user.username,
@@ -80,6 +108,67 @@ export async function login(req: Request, res: Response) {
       display_name: user.display_name,
       email: user.email,
       token_version: user.token_version || 0,
+    },
+  });
+}
+
+export async function adminLogin(req: Request, res: Response) {
+  const { username, password } = req.body || {};
+  if (!username || !password)
+    return res.status(400).json({ error: "username and password required" });
+  const user = await userModel.getUserByUsername(username);
+  if (!user)
+    return res.status(401).json({ error: "invalid credentials" });
+  if (!["Admin", "Editor"].includes(user.role))
+    return res.status(403).json({ error: "forbidden" });
+  if (user.blocked)
+    return res.status(403).json({ error: "account blocked" });
+
+  const ok = user.password_hash
+    ? await bcrypt.compare(password, user.password_hash)
+    : false;
+  if (!ok) {
+    await recordFailedAttempt(user as any);
+    if (user.blocked)
+      return res.status(403).json({ error: "account blocked" });
+    return res.status(401).json({ error: "invalid credentials" });
+  }
+
+  await resetFailedAttempts(user as any);
+
+  const accessToken = signToken({
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    token_version: user.token_version || 0,
+    scope: "admin",
+  });
+
+  const { token: refreshToken, tokenHash, expiresAt } = generateRefreshToken(
+    user.id
+  );
+
+  await userModel.updateUser(user.id, {
+    last_login: new Date().toISOString(),
+    failed_login_attempts: 0,
+    last_failed_login_at: null,
+    refresh_token_hash: tokenHash,
+    refresh_token_expires_at: expiresAt,
+  });
+
+  res.json({
+    token: accessToken,
+    expiresIn: process.env.JWT_EXPIRES_IN || "15m",
+    refreshToken,
+    refreshTokenExpiresAt: expiresAt,
+    user: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      display_name: user.display_name,
+      email: user.email,
+      token_version: user.token_version || 0,
+      scope: "admin",
     },
   });
 }
@@ -94,6 +183,76 @@ export async function kickUser(req: Request, res: Response) {
   if (!updated) return res.status(500).json({ error: "failed" });
   delete (updated as any).password_hash;
   res.json({ ok: true, token_version: next });
+}
+
+export async function refreshToken(req: Request, res: Response) {
+  const { refreshToken, scope } = req.body || {};
+  if (!refreshToken)
+    return res.status(400).json({ error: "refreshToken required" });
+  const parsed = parseRefreshToken(String(refreshToken));
+  if (!parsed) return res.status(401).json({ error: "invalid refresh token" });
+  const user = (await userModel.getUserById(parsed.userId)) as any;
+  if (!user) return res.status(401).json({ error: "invalid refresh token" });
+  if (user.blocked)
+    return res.status(403).json({ error: "account blocked" });
+  if (!user.refresh_token_hash || user.refresh_token_hash !== parsed.tokenHash)
+    return res.status(401).json({ error: "invalid refresh token" });
+  if (isRefreshExpired(user)) {
+    await userModel.updateUser(user.id, {
+      refresh_token_hash: null,
+      refresh_token_expires_at: null,
+    });
+    return res.status(401).json({ error: "refresh expired" });
+  }
+
+  const desiredScope = scope === "admin" ? "admin" : "default";
+  if (desiredScope === "admin" && !["Admin", "Editor"].includes(user.role)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+
+  const payload: any = {
+    id: user.id,
+    username: user.username,
+    role: user.role,
+    token_version: user.token_version || 0,
+    scope: desiredScope,
+  };
+  const accessToken = signToken(payload);
+
+  const { token: newRefreshToken, tokenHash, expiresAt } = generateRefreshToken(
+    user.id
+  );
+
+  await userModel.updateUser(user.id, {
+    refresh_token_hash: tokenHash,
+    refresh_token_expires_at: expiresAt,
+  });
+
+  res.json({
+    token: accessToken,
+    expiresIn: process.env.JWT_EXPIRES_IN || "15m",
+    refreshToken: newRefreshToken,
+    refreshTokenExpiresAt: expiresAt,
+    user: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      display_name: user.display_name,
+      email: user.email,
+      token_version: user.token_version || 0,
+      scope: desiredScope,
+    },
+  });
+}
+
+export async function logout(req: Request, res: Response) {
+  const authUser = (req as any).authUser;
+  if (!authUser) return res.status(401).json({ error: "unauthorized" });
+  await userModel.updateUser(authUser.id, {
+    refresh_token_hash: null,
+    refresh_token_expires_at: null,
+  });
+  res.json({ ok: true });
 }
 
 export async function list(req: Request, res: Response) {
