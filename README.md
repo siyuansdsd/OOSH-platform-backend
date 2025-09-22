@@ -118,12 +118,13 @@ SMTP_PASS=<SES_SMTP_PASSWORD>
 - 1) 发送验证码
 - 路径：POST /api/verify/send-code
 - 行为：
-  - 普通用户（role = `User`）：只需提供邮箱，若存在即发送验证码。
-  - Admin/Editor：必须提供邮箱 + 密码，密码校验失败会累计失败次数并可能封禁。
-  - StudentPublic：不支持验证码登录，接口会返回 403。
+  - 普通用户（role = `User`）：`purpose` 默认 `login`。邮箱存在时发送验证码；如果用于注册（`purpose: "register"`），邮箱不存在也可以发送。
+  - Admin/Editor：必须提供邮箱 + 密码；仅在登录模式下允许（`purpose` 缺省或 `login`），注册时若账号已存在返回 409。
+  - StudentPublic：不支持验证码。
 - 请求体示例：
-  - 普通用户：`{ "email": "user@example.com" }`
-  - Admin/Editor：`{ "email": "admin@example.com", "password": "PlainPassword" }`
+  - 登录普通用户：`{ "email": "user@example.com" }`
+  - 注册普通用户：`{ "email": "newuser@example.com", "purpose": "register" }`
+  - Admin/Editor 登录：`{ "email": "admin@example.com", "password": "PlainPassword" }`
 - 返回：
   - 200 { "ok": true } — 发送成功
   - 400 { "error": "email required" } / { "error": "password required" }
@@ -134,9 +135,11 @@ SMTP_PASS=<SES_SMTP_PASSWORD>
 - 2) 校验验证码
 - 路径：POST /api/verify/verify-code
 - 行为：
-  - 普通用户：提供邮箱 + code 即可校验。
-  - Admin/Editor：需邮箱 + 密码 + code。
-  - StudentPublic：同样不支持。
+  - 普通用户：
+    - 登录：`{ email, code }`
+    - 注册：`{ email, code, purpose: "register" }`（邮箱若已有账号返回 409）。
+  - Admin/Editor：`{ email, password, code }`（仅登录流程）。
+  - StudentPublic：不支持。
 - 请求体示例：
   - 普通用户：`{ "email": "user@example.com", "code": "123456" }`
   - Admin/Editor：`{ "email": "admin@example.com", "password": "PlainPassword", "code": "123456" }`
@@ -153,11 +156,11 @@ SMTP_PASS=<SES_SMTP_PASSWORD>
 
 curl -X POST https://your-api.example.com/api/verify/send-code \
  -H "Content-Type: application/json" \
- -d '{"email":"you@example.com"}'
+ -d '{"email":"you@example.com","purpose":"register"}'
 
 curl -X POST https://your-api.example.com/api/verify/verify-code \
  -H "Content-Type: application/json" \
- -d '{"email":"you@example.com","code":"123456"}'
+ -d '{"email":"you@example.com","code":"123456","purpose":"register"}'
 
 ````
 
