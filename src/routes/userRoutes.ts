@@ -13,6 +13,7 @@ router.post("/logout", authMiddleware, ctrl.logout);
 
 // admin routes
 router.use(authMiddleware);
+router.patch("/me", ctrl.updateSelf);
 router.get("/", requireRole("Admin"), ctrl.list);
 router.get("/:id", requireRole("Admin"), ctrl.getOne);
 router.put("/:id", requireRole("Admin"), ctrl.update);

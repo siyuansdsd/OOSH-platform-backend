@@ -270,6 +270,39 @@ export async function logout(req: Request, res: Response) {
   res.json({ ok: true, token_version: nextVersion });
 }
 
+export async function updateSelf(req: Request, res: Response) {
+  const authUser = (req as any).authUser;
+  if (!authUser) return res.status(401).json({ error: "unauthorized" });
+
+  const body = req.body || {};
+  // prevent email changes through self-service endpoint
+  if (
+    Object.prototype.hasOwnProperty.call(body, "email") &&
+    body.email !== undefined &&
+    body.email !== authUser.email
+  ) {
+    return res.status(400).json({ error: "email change not allowed" });
+  }
+
+  const patch: Record<string, any> = {};
+  if (Object.prototype.hasOwnProperty.call(body, "display_name")) {
+    patch.display_name = body.display_name;
+  }
+
+  if (typeof body.password === "string" && body.password.length > 0) {
+    patch.password_hash = await bcrypt.hash(body.password, SALT_ROUNDS);
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ error: "no permitted fields" });
+  }
+
+  const updated = await userModel.updateUser(authUser.id, patch);
+  if (!updated) return res.status(404).json({ error: "not found" });
+  delete (updated as any).password_hash;
+  res.json(updated);
+}
+
 export async function list(req: Request, res: Response) {
   const users = await userModel.listUsers(1000);
   // strip password_hash
