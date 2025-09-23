@@ -285,11 +285,15 @@ export async function updateSelf(req: Request, res: Response) {
   }
 
   const patch: Record<string, any> = {};
+  const allowPassword = authUser.role !== "User";
   if (Object.prototype.hasOwnProperty.call(body, "display_name")) {
     patch.display_name = body.display_name;
   }
 
   if (typeof body.password === "string" && body.password.length > 0) {
+    if (!allowPassword) {
+      return res.status(400).json({ error: "password change not allowed" });
+    }
     patch.password_hash = await bcrypt.hash(body.password, SALT_ROUNDS);
   }
 
