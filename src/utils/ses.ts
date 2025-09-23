@@ -43,6 +43,9 @@ export async function sendVerificationEmail(to: string, code: string) {
     throw new Error("SES_FROM not configured");
   }
   const subject = "MaxHacker verification code";
+  const logoUrl =
+    process.env.SES_LOGO_URL ||
+    "https://maxhacker.io/wp-content/uploads/2025/02/icononly_transparent_nobuffer-2-1.png";
 
   const codeCells = code
     .split("")
@@ -57,6 +60,11 @@ export async function sendVerificationEmail(to: string, code: string) {
   const bodyHtml = `
   <div style="margin:0;padding:28px;background:#f3f6fd;font-family:'Segoe UI',Helvetica,Arial,sans-serif;color:#1b2540;">
     <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:540px;margin:0 auto;background:#ffffff;border-radius:16px;box-shadow:0 8px 24px rgba(20,27,55,0.08);overflow:hidden;">
+      <tr>
+        <td style="padding:32px 40px 0;text-align:center;">
+          <img src="${logoUrl}" alt="MaxHacker" style="width:72px;height:72px;border-radius:50%;border:1px solid #e3e8f8;object-fit:contain;" />
+        </td>
+      </tr>
       <tr>
         <td style="padding:36px 40px 24px;font-size:22px;font-weight:600;">Hi there,</td>
       </tr>
