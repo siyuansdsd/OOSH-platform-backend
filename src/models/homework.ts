@@ -1,5 +1,16 @@
 import AWS from "aws-sdk";
 
+export const ALLOWED_HOMEWORK_SCHOOLS = [
+  "The Y Panania OSHC",
+  "Eastwood Before & After School Care Centre Inc",
+  "Randwick Out of School Hours Care (Randwick OOSH)",
+  "Crown Street Out of School Hours Care (OSHC)",
+  "The Y Oakhill Drive OSHC",
+  "Max Hacker Tech Club",
+] as const;
+
+export type HomeworkSchool = (typeof ALLOWED_HOMEWORK_SCHOOLS)[number];
+
 export type Homework = {
   id: string; // uuid
   // is_team: true => team homework (requires group_name + members)
@@ -9,7 +20,7 @@ export type Homework = {
   description: string;
   group_name?: string;
   person_name?: string;
-  school_name: string;
+  school_name: HomeworkSchool;
   members?: string[];
   images?: string[];
   videos?: string[];
@@ -40,7 +51,13 @@ function validateRequiredFields(
   if (typeof h.title !== "string" || !h.title.trim()) missing.push("title");
   if (typeof h.description !== "string" || !h.description.trim())
     missing.push("description");
-  if (!h.school_name) missing.push("school_name");
+  if (!h.school_name) {
+    missing.push("school_name");
+  } else if (!ALLOWED_HOMEWORK_SCHOOLS.includes(h.school_name as HomeworkSchool)) {
+    throw new Error(
+      `Invalid school_name. Allowed schools: ${ALLOWED_HOMEWORK_SCHOOLS.join(", ")}`
+    );
+  }
   // conditional: team requires group_name + members; personal requires person_name
   if (h.is_team) {
     if (!h.group_name) missing.push("group_name");
