@@ -108,27 +108,17 @@ export async function getUserByEmail(email: string) {
 }
 
 export async function listUsers(limit = 100) {
+  const indexName = process.env.USER_ENTITY_INDEX || "EntityTypeIndex";
   const r = await ddb
     .query({
       TableName: TABLE,
-      IndexName: undefined as any,
+      IndexName: indexName,
       KeyConditionExpression: "entityType = :e",
       ExpressionAttributeValues: { ":e": "USER" },
       Limit: limit,
+      ScanIndexForward: false,
     })
-    .promise()
-    .catch(async () => {
-      // fallback to scan
-      const s = await ddb
-        .scan({
-          TableName: TABLE,
-          FilterExpression: "entityType = :e",
-          ExpressionAttributeValues: { ":e": "USER" },
-          Limit: limit,
-        })
-        .promise();
-      return s as any;
-    });
+    .promise();
   return r.Items || [];
 }
 
