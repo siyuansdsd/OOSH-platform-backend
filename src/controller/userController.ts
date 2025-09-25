@@ -12,6 +12,28 @@ import bcrypt from "bcryptjs";
 
 const SALT_ROUNDS = 10;
 
+type FetchLikeResponse = {
+  ok: boolean;
+  status: number;
+  json(): Promise<any>;
+  text(): Promise<string>;
+};
+
+type FetchLike = (
+  input: string,
+  init?: { method?: string; headers?: Record<string, string> }
+) => Promise<FetchLikeResponse>;
+
+type HubspotContactResponse = {
+  id: string;
+  properties?: {
+    email?: string | null;
+    firstname?: string | null;
+    lastname?: string | null;
+  };
+  archived?: boolean;
+};
+
 export async function register(req: Request, res: Response) {
   const { username, password, display_name, email, role } = req.body || {};
   if (!username)
@@ -155,6 +177,13 @@ export async function adminLogin(req: Request, res: Response) {
       .status(400)
       .json({ error: "username, password and code required" });
   const user = await userModel.getUserByUsername(username);
+  console.info("[adminLogin] lookup", {
+    username,
+    found: !!user,
+    hasPasswordHash: !!user?.password_hash,
+    blocked: !!user?.blocked,
+    role: user?.role,
+  });
   if (!user)
     return res.status(401).json({ error: "invalid credentials" });
   if (!["Admin", "Editor"].includes(user.role))
@@ -184,6 +213,115 @@ export async function adminLogin(req: Request, res: Response) {
   await redisDel(key);
 
   return issueTokensForUser(user, "admin", res);
+}
+
+export async function hubspotContactLogin(req: Request, res: Response) {
+  const contactId = String(req.body?.contactId || "").trim();
+  if (!contactId) {
+    return res.status(400).json({ error: "contactId required" });
+  }
+
+  const hubspotToken =
+    process.env.HUBSPOT_PRIVATE_APP_TOKEN || process.env.HUBSPOT_ACCESS_TOKEN;
+  if (!hubspotToken) {
+    return res.status(500).json({ error: "hubspot token not configured" });
+  }
+
+  const fetchImpl: FetchLike | undefined = (globalThis as any).fetch;
+  if (typeof fetchImpl !== "function") {
+    return res.status(500).json({ error: "fetch api unavailable" });
+  }
+
+  const baseUrl =
+    process.env.HUBSPOT_BASE_URL || "https://api.hubapi.com";
+  const url = new URL(
+    `/crm/v3/objects/contacts/${encodeURIComponent(contactId)}`,
+    baseUrl
+  );
+  url.searchParams.append("properties", "email");
+  url.searchParams.append("properties", "firstname");
+  url.searchParams.append("properties", "lastname");
+
+  let contactData: HubspotContactResponse;
+  try {
+    const response = await fetchImpl(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${hubspotToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (response.status === 404) {
+      return res.status(404).json({ error: "contact not found" });
+    }
+
+    if (!response.ok) {
+      const hint = await response.text().catch(() => "");
+      return res.status(502).json({
+        error: "hubspot_error",
+        status: response.status,
+        message: hint.slice(0, 200),
+      });
+    }
+
+    contactData = (await response.json()) as HubspotContactResponse;
+  } catch (err: any) {
+    return res.status(502).json({
+      error: "hubspot_request_failed",
+      message: err?.message || String(err),
+    });
+  }
+
+  if (!contactData || contactData.archived) {
+    return res.status(404).json({ error: "contact not available" });
+  }
+
+  const email = contactData.properties?.email?.trim();
+  if (!email) {
+    return res.status(400).json({ error: "contact email missing" });
+  }
+
+  const firstname = contactData.properties?.firstname?.trim() || "";
+  const lastname = contactData.properties?.lastname?.trim() || "";
+  const displayName = [firstname, lastname].filter(Boolean).join(" ") || email;
+
+  let user = await userModel.getUserByEmail(email);
+
+  if (!user) {
+    const baseUsername = email || `hubspot-${contactId}`;
+    let candidate = baseUsername;
+    let suffix = 1;
+    while (await userModel.getUserByUsername(candidate)) {
+      candidate = `${baseUsername}-${suffix++}`;
+    }
+
+    user = await userModel.createUser({
+      username: candidate,
+      display_name: displayName,
+      email,
+      role: "User",
+    });
+  } else {
+    if (user.blocked) {
+      return res.status(403).json({ error: "account blocked" });
+    }
+
+    const patch: Partial<userModel.UserItem> = {};
+    if (displayName && user.display_name !== displayName) {
+      patch.display_name = displayName;
+    }
+    if (user.role !== "User") {
+      patch.role = "User";
+    }
+    if (Object.keys(patch).length > 0) {
+      const updated = await userModel.updateUser(user.id, patch);
+      if (updated) {
+        user = updated;
+      }
+    }
+  }
+
+  return issueTokensForUser(user as any, "default", res);
 }
 
 // Admin: increment token_version to revoke existing tokens for a user

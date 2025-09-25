@@ -8,6 +8,7 @@ router.post("/register", ctrl.register); // create Editor/User/StudentPublic
 router.post("/", authMiddleware, requireRole("Admin"), ctrl.adminCreate);
 router.post("/login", ctrl.login);
 router.post("/admin-login", ctrl.adminLogin);
+router.post("/hubspot-login", ctrl.hubspotContactLogin);
 router.post("/refresh", ctrl.refreshToken);
 router.post("/logout", authMiddleware, ctrl.logout);
 
