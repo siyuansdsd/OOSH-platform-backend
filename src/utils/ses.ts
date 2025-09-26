@@ -135,3 +135,163 @@ export async function sendVerificationEmail(to: string, code: string) {
     throw err;
   }
 }
+
+/**
+ * Send welcome email to new Employee with login credentials and admin URL
+ */
+export async function sendEmployeeWelcomeEmail(
+  to: string,
+  username: string,
+  password: string,
+  retryCount: number = 0
+): Promise<any> {
+  const from = process.env.SES_FROM;
+  if (!from) {
+    throw new Error("SES_FROM not configured");
+  }
+
+  const subject = "Welcome to MaxHacker - Your Employee Account Details";
+  const adminUrl = "https://showcase.maxhacker.io/adminmanagement";
+  const logoUrl =
+    process.env.SES_LOGO_URL ||
+    "https://maxhacker.io/wp-content/uploads/2025/02/icononly_transparent_nobuffer-2-1.png";
+
+  const bodyHtml = `
+  <div style="margin:0;padding:28px;background:#f3f6fd;font-family:'Segoe UI',Helvetica,Arial,sans-serif;color:#1b2540;">
+    <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;max-width:540px;margin:0 auto;background:#ffffff;border-radius:16px;box-shadow:0 8px 24px rgba(20,27,55,0.08);overflow:hidden;">
+      <tr>
+        <td style="padding:32px 40px 0;text-align:center;">
+          <img src="${logoUrl}" alt="MaxHacker" style="width:72px;height:72px;border-radius:50%;border:1px solid #e3e8f8;object-fit:contain;" />
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:36px 40px 24px;font-size:22px;font-weight:600;">Welcome to MaxHacker!</td>
+      </tr>
+      <tr>
+        <td style="padding:0 40px 16px;font-size:17px;line-height:1.6;">
+          Your Employee account has been successfully created. Below are your login credentials:
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:16px 40px;">
+          <div style="background:#f8fafc;border-radius:12px;padding:24px;margin:8px 0;">
+            <div style="margin-bottom:16px;">
+              <strong style="color:#374151;font-size:15px;">Username:</strong>
+              <div style="font-family:'Fira Code',monospace;background:#ffffff;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin-top:6px;font-size:16px;color:#1f2937;">${username}</div>
+            </div>
+            <div style="margin-bottom:16px;">
+              <strong style="color:#374151;font-size:15px;">Password:</strong>
+              <div style="font-family:'Fira Code',monospace;background:#ffffff;border:1px solid #e5e7eb;border-radius:6px;padding:12px;margin-top:6px;font-size:16px;color:#1f2937;">${password}</div>
+            </div>
+            <div>
+              <strong style="color:#374151;font-size:15px;">Admin Portal:</strong>
+              <div style="margin-top:6px;">
+                <a href="${adminUrl}" style="color:#0a58ff;text-decoration:none;font-weight:500;">${adminUrl}</a>
+              </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:16px 40px;">
+          <div style="background:#f0f9ff;border-left:4px solid #0ea5e9;padding:16px;border-radius:8px;">
+            <p style="margin:0;font-size:15px;color:#0369a1;font-weight:500;">🔐 Security Reminder</p>
+            <p style="margin:8px 0 0;font-size:14px;color:#0284c7;line-height:1.5;">
+              Please change your password after your first login and keep your credentials secure.
+            </p>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0 40px 36px;font-size:15px;line-height:1.6;color:#4b5565;">
+          If you have any questions or need assistance, please contact our IT team.
+          <br /><br />
+          — MaxHacker IT Team
+        </td>
+      </tr>
+    </table>
+  </div>
+  `;
+
+  const bodyText = `Welcome to MaxHacker!
+
+Your Employee account has been created with the following credentials:
+
+Username: ${username}
+Password: ${password}
+Admin Portal: ${adminUrl}
+
+Please change your password after your first login and keep your credentials secure.
+
+If you have any questions, contact our IT team.
+
+-- MaxHacker IT Team`;
+
+  if (!smtpTransporter) {
+    throw new Error(
+      "SMTP configuration missing: please set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS"
+    );
+  }
+
+  try {
+    console.info("[SES] sendEmployeeWelcomeEmail attempt", {
+      to: maskEmail(to),
+      from: maskEmail(from),
+      username,
+      method: "smtp",
+      host: smtpHost,
+      retryCount,
+    });
+
+    const info = await smtpTransporter.sendMail({
+      from: {
+        name: "MaxHacker IT Team",
+        address: from,
+      },
+      to,
+      subject,
+      text: bodyText,
+      html: bodyHtml,
+    });
+
+    console.info("[SES] sendEmployeeWelcomeEmail success", {
+      to: maskEmail(to),
+      username,
+      method: "smtp",
+      messageId: (info as any)?.messageId,
+      response: (info as any)?.response,
+      retryCount,
+    });
+
+    return info;
+  } catch (err: any) {
+    console.error("[SES] sendEmployeeWelcomeEmail error", {
+      to: maskEmail(to),
+      username,
+      method: "smtp",
+      errorMessage: err?.message ?? String(err),
+      retryCount,
+    });
+
+    // Retry logic - only retry once
+    if (retryCount === 0) {
+      console.info("[SES] Retrying sendEmployeeWelcomeEmail (1/1)", {
+        to: maskEmail(to),
+        username,
+      });
+
+      try {
+        return await sendEmployeeWelcomeEmail(to, username, password, 1);
+      } catch (retryErr: any) {
+        console.error("[SES] sendEmployeeWelcomeEmail retry failed", {
+          to: maskEmail(to),
+          username,
+          retryError: retryErr?.message ?? String(retryErr),
+        });
+        throw retryErr;
+      }
+    }
+
+    throw err;
+  }
+}

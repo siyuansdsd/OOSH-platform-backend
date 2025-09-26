@@ -8,6 +8,7 @@ import {
   parseRefreshToken,
   isRefreshExpired,
 } from "../utils/refreshTokens.js";
+import { sendEmployeeWelcomeEmail } from "../utils/ses.js";
 import bcrypt from "bcryptjs";
 
 const SALT_ROUNDS = 10;
@@ -81,6 +82,33 @@ export async function adminCreate(req: Request, res: Response) {
     role: role || "User",
     blocked: !!blocked,
   });
+
+  // Send welcome email for Employee role creation
+  if (role === "Employee" && email && !blocked) {
+    try {
+      console.info("[adminCreate] Sending welcome email to Employee", {
+        email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
+        username,
+        role,
+      });
+
+      await sendEmployeeWelcomeEmail(email, username, password);
+
+      console.info("[adminCreate] Welcome email sent successfully", {
+        email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
+        username,
+      });
+    } catch (emailError: any) {
+      console.error("[adminCreate] Failed to send welcome email", {
+        email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
+        username,
+        error: emailError?.message ?? String(emailError),
+      });
+      // Continue with account creation even if email fails
+      // The admin will see the error in logs and can manually send credentials
+    }
+  }
+
   delete (u as any).password_hash;
   res.status(201).json(u);
 }
