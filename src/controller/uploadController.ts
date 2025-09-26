@@ -570,3 +570,198 @@ export async function uploadMultiHandler(req: Request, res: Response) {
       .json({ error: "upload failed", details: String(err) });
   }
 }
+
+// Extract S3 key from URL
+function extractS3Key(possibleUrl: string): string | null {
+  if (!possibleUrl) return null;
+  // if it's already a key (no protocol), assume it's a key
+  if (!possibleUrl.startsWith("http")) return possibleUrl;
+  // try to find amazonaws.com/ and take the rest as key
+  const marker = ".amazonaws.com/";
+  const idx = possibleUrl.indexOf(marker);
+  if (idx >= 0) return possibleUrl.slice(idx + marker.length);
+  // fallback: if URL contains bucket.s3..., attempt split at bucket name
+  if (possibleUrl.includes(`${BUCKET}.s3.`)) {
+    const parts = possibleUrl.split(`${BUCKET}.s3.`);
+    if (parts.length > 1) {
+      const afterBucket = parts[1];
+      if (afterBucket) {
+        const slashIdx = afterBucket.indexOf("/");
+        if (slashIdx >= 0) return afterBucket.slice(slashIdx + 1);
+      }
+    }
+  }
+  return null;
+}
+
+export async function deleteFiles(req: Request, res: Response) {
+  const { urls } = req.body || {};
+
+  if (!urls || !Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: "urls array required" });
+  }
+
+  if (!BUCKET) {
+    return res.status(500).json({ error: "S3_BUCKET not configured" });
+  }
+
+  const results: Array<{
+    url: string;
+    key: string | null;
+    success: boolean;
+    error?: string;
+  }> = [];
+
+  try {
+    // Extract keys from URLs
+    const keysToDelete: string[] = [];
+    const urlKeyMap = new Map<string, string>();
+
+    for (const url of urls) {
+      const urlStr = String(url || "").trim();
+      if (!urlStr) {
+        results.push({
+          url: urlStr,
+          key: null,
+          success: false,
+          error: "empty URL"
+        });
+        continue;
+      }
+
+      const key = extractS3Key(urlStr);
+      if (!key) {
+        results.push({
+          url: urlStr,
+          key: null,
+          success: false,
+          error: "could not extract S3 key from URL"
+        });
+        continue;
+      }
+
+      keysToDelete.push(key);
+      urlKeyMap.set(key, urlStr);
+    }
+
+    if (keysToDelete.length === 0) {
+      return res.status(400).json({
+        error: "no valid S3 URLs found",
+        results
+      });
+    }
+
+    // Batch delete using deleteObjects if multiple files
+    if (keysToDelete.length > 1) {
+      try {
+        const deleteParams = {
+          Bucket: BUCKET,
+          Delete: {
+            Objects: keysToDelete.map(Key => ({ Key }))
+          }
+        };
+
+        const deleteResult = await s3.deleteObjects(deleteParams).promise();
+
+        // Mark successful deletions
+        if (deleteResult.Deleted) {
+          for (const deleted of deleteResult.Deleted) {
+            if (deleted.Key) {
+              const url = urlKeyMap.get(deleted.Key);
+              if (url) {
+                results.push({
+                  url,
+                  key: deleted.Key,
+                  success: true
+                });
+              }
+            }
+          }
+        }
+
+        // Mark failed deletions
+        if (deleteResult.Errors) {
+          for (const error of deleteResult.Errors) {
+            if (error.Key) {
+              const url = urlKeyMap.get(error.Key);
+              if (url) {
+                results.push({
+                  url,
+                  key: error.Key,
+                  success: false,
+                  error: `${error.Code}: ${error.Message}`
+                });
+              }
+            }
+          }
+        }
+
+      } catch (bulkError) {
+        console.error("bulk S3 delete failed, attempting individual deletes", bulkError);
+
+        // Fallback to individual deletes
+        for (const key of keysToDelete) {
+          const url = urlKeyMap.get(key);
+          if (url && key) {
+            try {
+              await s3.deleteObject({ Bucket: BUCKET, Key: key }).promise();
+              results.push({
+                url,
+                key,
+                success: true
+              });
+            } catch (singleError) {
+              results.push({
+                url,
+                key,
+                success: false,
+                error: String(singleError)
+              });
+            }
+          }
+        }
+      }
+    } else {
+      // Single file delete
+      const key = keysToDelete[0];
+      const url = urlKeyMap.get(key);
+
+      if (url && key) {
+        try {
+          await s3.deleteObject({ Bucket: BUCKET, Key: key }).promise();
+          results.push({
+            url,
+            key,
+            success: true
+          });
+        } catch (singleError) {
+          results.push({
+            url,
+            key,
+            success: false,
+            error: String(singleError)
+          });
+        }
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    const failureCount = results.filter(r => !r.success).length;
+
+    res.json({
+      message: `${successCount} files deleted successfully, ${failureCount} failed`,
+      totalRequested: urls.length,
+      successCount,
+      failureCount,
+      results
+    });
+
+  } catch (err) {
+    console.error("deleteFiles error", err);
+    res.status(500).json({
+      error: "delete operation failed",
+      details: String(err),
+      results
+    });
+  }
+}

@@ -3,6 +3,7 @@ import multer from "multer";
 import {
   presignHandler,
   uploadHandler,
+  deleteFiles,
 } from "../controller/uploadController.js";
 import { uploadMultiHandler } from "../controller/uploadController.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
@@ -38,5 +39,8 @@ router.post("/upload", upload.single("file"), uploadHandler);
 
 // server-side multi-file upload with compression
 router.post("/upload-multi", upload.array("files", 20), uploadMultiHandler);
+
+// delete files from S3 by URLs
+router.delete("/files", deleteFiles);
 
 export default router;
