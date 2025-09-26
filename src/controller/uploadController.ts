@@ -701,7 +701,7 @@ export async function deleteFiles(req: Request, res: Response) {
 
         // Fallback to individual deletes
         for (const key of keysToDelete) {
-          const url = urlKeyMap.get(key);
+          const url: string | undefined = urlKeyMap.get(key);
           if (url && key) {
             try {
               await s3.deleteObject({ Bucket: BUCKET, Key: key }).promise();
@@ -723,8 +723,8 @@ export async function deleteFiles(req: Request, res: Response) {
       }
     } else {
       // Single file delete
-      const key = keysToDelete[0];
-      const url = urlKeyMap.get(key);
+      const key: string | undefined = keysToDelete[0];
+      const url: string | undefined = key ? urlKeyMap.get(key) : undefined;
 
       if (url && key) {
         try {
