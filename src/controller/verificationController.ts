@@ -26,12 +26,12 @@ export async function sendCode(req: Request, res: Response) {
       return res.status(409).json({ error: "email already registered" });
     if (user.blocked)
       return res.status(403).json({ error: "account blocked" });
-    if (user.role === "StudentPublic")
+    if (user.role === "Temporary")
       return res
         .status(403)
         .json({ error: "code not supported for this account" });
 
-    if (["Admin", "Editor"].includes(user.role)) {
+    if (["Admin", "Employee"].includes(user.role)) {
       if (!password)
         return res.status(400).json({ error: "password required" });
       const ok = user.password_hash
@@ -101,10 +101,10 @@ export async function verifyCode(req: Request, res: Response) {
     return res.status(409).json({ error: "email already registered" });
   if (user.blocked)
     return res.status(403).json({ error: "account blocked" });
-  if (user.role === "StudentPublic")
+  if (user.role === "Temporary")
     return res.status(403).json({ error: "code not supported for this account" });
 
-  if (["Admin", "Editor"].includes(user.role)) {
+  if (["Admin", "Employee"].includes(user.role)) {
     if (!password)
       return res.status(400).json({ error: "password required" });
     const ok = user.password_hash

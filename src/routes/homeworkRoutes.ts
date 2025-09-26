@@ -15,19 +15,19 @@ router.get("/:id", ctrl.getOne);
 router.post(
   "/",
   authMiddleware,
-  requireRole("Admin", "Editor", "StudentPublic"),
+  requireRole("Admin", "Employee", "Temporary"),
   ctrl.create
 );
 router.put(
   "/:id",
   authMiddleware,
-  requireRole("Admin", "Editor"),
+  requireRole("Admin", "Employee"),
   ctrl.update
 );
 router.delete(
   "/:id",
   authMiddleware,
-  requireRole("Admin", "Editor"),
+  requireRole("Admin", "Employee"),
   ctrl.remove
 );
 

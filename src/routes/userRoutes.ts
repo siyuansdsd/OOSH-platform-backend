@@ -4,7 +4,7 @@ import { authMiddleware, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
 
-router.post("/register", ctrl.register); // create Editor/User/StudentPublic
+router.post("/register", ctrl.register); // create Employee/User/Temporary
 router.post("/", authMiddleware, requireRole("Admin"), ctrl.adminCreate);
 router.post("/login", ctrl.login);
 router.post("/admin-login", ctrl.adminLogin);

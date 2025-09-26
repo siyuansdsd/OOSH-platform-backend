@@ -14,7 +14,7 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
-router.use(authMiddleware, requireRole("Admin", "Editor", "StudentPublic"));
+router.use(authMiddleware, requireRole("Admin", "Employee", "Temporary"));
 
 router.post("/presign", presignHandler);
 // create draft homework + presign for client-side upload

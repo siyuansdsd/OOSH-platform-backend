@@ -38,8 +38,8 @@ export async function register(req: Request, res: Response) {
   const { username, password, display_name, email, role } = req.body || {};
   if (!username)
     return res.status(400).json({ error: "username required" });
-  // only allow creating Editor or User or StudentPublic via this endpoint
-  const allowedRoles = ["Editor", "User", "StudentPublic"];
+  // only allow creating Employee or User or Temporary via this endpoint
+  const allowedRoles = ["Employee", "User", "Temporary"];
   const finalRole = allowedRoles.includes(role) ? role : "User";
 
   if (finalRole !== "User" && !password)
@@ -113,7 +113,7 @@ export async function login(req: Request, res: Response) {
     const user = await userModel.getUserByUsername(username);
     if (!user) return res.status(401).json({ error: "invalid credentials" });
     if (user.blocked) return res.status(403).json({ error: "account blocked" });
-    if (user.role !== "StudentPublic")
+    if (user.role !== "Temporary")
       return res.status(403).json({ error: "forbidden" });
     const ok = user.password_hash
       ? await bcrypt.compare(password, user.password_hash)
@@ -186,7 +186,7 @@ export async function adminLogin(req: Request, res: Response) {
   });
   if (!user)
     return res.status(401).json({ error: "invalid credentials" });
-  if (!["Admin", "Editor"].includes(user.role))
+  if (!["Admin", "Employee"].includes(user.role))
     return res.status(403).json({ error: "forbidden" });
   if (user.blocked)
     return res.status(403).json({ error: "account blocked" });
@@ -357,7 +357,7 @@ export async function refreshToken(req: Request, res: Response) {
   }
 
   const desiredScope = scope === "admin" ? "admin" : "default";
-  if (desiredScope === "admin" && !["Admin", "Editor"].includes(user.role)) {
+  if (desiredScope === "admin" && !["Admin", "Employee"].includes(user.role)) {
     return res.status(403).json({ error: "forbidden" });
   }
 

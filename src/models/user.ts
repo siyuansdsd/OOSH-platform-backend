@@ -1,7 +1,7 @@
 import AWS from "aws-sdk";
 import { v4 as uuidv4 } from "uuid";
 
-export type Role = "Admin" | "Editor" | "User" | "StudentPublic";
+export type Role = "Admin" | "Employee" | "User" | "Temporary";
 
 export type UserItem = {
   id: string;
