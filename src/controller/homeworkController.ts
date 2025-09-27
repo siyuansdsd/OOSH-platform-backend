@@ -65,8 +65,13 @@ export async function create(req: Request, res: Response) {
 export async function getOne(req: Request, res: Response) {
   const id = req.params.id;
   if (!id) return res.status(400).json({ error: "id required" });
+  console.debug("[getOne] received id", { id });
   const r = await hw.getHomework(id);
-  if (!r) return res.status(404).json({ error: "not found" });
+  if (!r) {
+    console.info("[getOne] homework not found", { id });
+    return res.status(404).json({ error: "not found" });
+  }
+  console.debug("[getOne] found homework", { id });
   res.json(r);
 }
 

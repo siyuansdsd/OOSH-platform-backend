@@ -161,15 +161,35 @@ export async function createHomeworkDraft(h: Homework) {
 
 export async function getHomework(id: string) {
   const pk = `HOMEWORK#${id}`;
-  const r = await ddb
-    .query({
+  try {
+    const params = {
       TableName: TABLE,
       KeyConditionExpression: "PK = :p and begins_with(SK, :s)",
       ExpressionAttributeValues: { ":p": pk, ":s": "META#" },
       Limit: 1,
-    })
-    .promise();
-  return (r.Items && r.Items[0]) || null;
+    } as any;
+    console.debug("[getHomework] query params", {
+      table: TABLE,
+      params: { ...params, ExpressionAttributeValues: undefined },
+    });
+    const r = await ddb.query(params).promise();
+    console.debug("[getHomework] query result", {
+      id,
+      items: (r.Items || []).length,
+    });
+    if (!r.Items || r.Items.length === 0) {
+      // also helpful to surface a bit more info in logs
+      console.info("[getHomework] no items returned", { id, table: TABLE });
+    }
+    return (r.Items && r.Items[0]) || null;
+  } catch (err) {
+    console.error("[getHomework] ddb query failed", {
+      id,
+      table: TABLE,
+      err: (err as any)?.message || String(err),
+    });
+    throw err;
+  }
 }
 
 export async function listHomeworks(limit = 100) {
