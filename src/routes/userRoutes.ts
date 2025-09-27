@@ -21,5 +21,10 @@ router.put("/:id", requireRole("Admin"), ctrl.update);
 router.delete("/:id", requireRole("Admin"), ctrl.remove);
 router.post("/:id/block", requireRole("Admin"), ctrl.blockUser);
 router.post("/:id/kick", requireRole("Admin"), ctrl.kickUser);
+router.post(
+  "/:id/reset-password",
+  requireRole("Admin"),
+  ctrl.adminResetPassword
+);
 
 export default router;

@@ -1,7 +1,10 @@
 import type { Request, Response } from "express";
 import * as userModel from "../models/user.js";
 import { signToken } from "../utils/jwt.js";
-import { recordFailedAttempt, resetFailedAttempts } from "../utils/authAttempts.js";
+import {
+  recordFailedAttempt,
+  resetFailedAttempts,
+} from "../utils/authAttempts.js";
 import { redisGet, redisDel } from "../utils/redisClient.js";
 import {
   generateRefreshToken,
@@ -37,8 +40,7 @@ type HubspotContactResponse = {
 
 export async function register(req: Request, res: Response) {
   const { username, password, display_name, email, role } = req.body || {};
-  if (!username)
-    return res.status(400).json({ error: "username required" });
+  if (!username) return res.status(400).json({ error: "username required" });
   // only allow creating Employee or User or Temporary via this endpoint
   const allowedRoles = ["Employee", "User", "Temporary"];
   const finalRole = allowedRoles.includes(role) ? role : "User";
@@ -76,12 +78,17 @@ export async function adminCreate(req: Request, res: Response) {
   const hash = await bcrypt.hash(password, SALT_ROUNDS);
 
   // Normalize role to proper casing
-  const normalizedRole = role ?
-    role.toLowerCase() === "employee" ? "Employee" :
-    role.toLowerCase() === "admin" ? "Admin" :
-    role.toLowerCase() === "user" ? "User" :
-    role.toLowerCase() === "temporary" ? "Temporary" :
-    role : "User";
+  const normalizedRole = role
+    ? role.toLowerCase() === "employee"
+      ? "Employee"
+      : role.toLowerCase() === "admin"
+      ? "Admin"
+      : role.toLowerCase() === "user"
+      ? "User"
+      : role.toLowerCase() === "temporary"
+      ? "Temporary"
+      : role
+    : "User";
 
   const u = await userModel.createUser({
     username,
@@ -147,8 +154,7 @@ export async function login(req: Request, res: Response) {
     const ok = user.password_hash
       ? await bcrypt.compare(password, user.password_hash)
       : false;
-    if (!ok)
-      return res.status(401).json({ error: "invalid credentials" });
+    if (!ok) return res.status(401).json({ error: "invalid credentials" });
 
     await resetFailedAttempts(user as any);
     return issueTokensForUser(user, "default", res);
@@ -170,9 +176,11 @@ async function issueTokensForUser(
     scope,
   });
 
-  const { token: refreshToken, tokenHash, expiresAt } = generateRefreshToken(
-    user.id
-  );
+  const {
+    token: refreshToken,
+    tokenHash,
+    expiresAt,
+  } = generateRefreshToken(user.id);
 
   await userModel.updateUser(user.id, {
     last_login: new Date().toISOString(),
@@ -213,20 +221,17 @@ export async function adminLogin(req: Request, res: Response) {
     blocked: !!user?.blocked,
     role: user?.role,
   });
-  if (!user)
-    return res.status(401).json({ error: "invalid credentials" });
+  if (!user) return res.status(401).json({ error: "invalid credentials" });
   if (!["Admin", "Employee"].includes(user.role))
     return res.status(403).json({ error: "forbidden" });
-  if (user.blocked)
-    return res.status(403).json({ error: "account blocked" });
+  if (user.blocked) return res.status(403).json({ error: "account blocked" });
 
   const ok = user.password_hash
     ? await bcrypt.compare(password, user.password_hash)
     : false;
   if (!ok) {
     await recordFailedAttempt(user as any);
-    if (user.blocked)
-      return res.status(403).json({ error: "account blocked" });
+    if (user.blocked) return res.status(403).json({ error: "account blocked" });
     return res.status(401).json({ error: "invalid credentials" });
   }
 
@@ -261,8 +266,7 @@ export async function hubspotContactLogin(req: Request, res: Response) {
     return res.status(500).json({ error: "fetch api unavailable" });
   }
 
-  const baseUrl =
-    process.env.HUBSPOT_BASE_URL || "https://api.hubapi.com";
+  const baseUrl = process.env.HUBSPOT_BASE_URL || "https://api.hubapi.com";
   const url = new URL(
     `/crm/v3/objects/contacts/${encodeURIComponent(contactId)}`,
     baseUrl
@@ -373,8 +377,7 @@ export async function refreshToken(req: Request, res: Response) {
   if (!parsed) return res.status(401).json({ error: "invalid refresh token" });
   const user = (await userModel.getUserById(parsed.userId)) as any;
   if (!user) return res.status(401).json({ error: "invalid refresh token" });
-  if (user.blocked)
-    return res.status(403).json({ error: "account blocked" });
+  if (user.blocked) return res.status(403).json({ error: "account blocked" });
   if (!user.refresh_token_hash || user.refresh_token_hash !== parsed.tokenHash)
     return res.status(401).json({ error: "invalid refresh token" });
   if (isRefreshExpired(user)) {
@@ -399,9 +402,11 @@ export async function refreshToken(req: Request, res: Response) {
   };
   const accessToken = signToken(payload);
 
-  const { token: newRefreshToken, tokenHash, expiresAt } = generateRefreshToken(
-    user.id
-  );
+  const {
+    token: newRefreshToken,
+    tokenHash,
+    expiresAt,
+  } = generateRefreshToken(user.id);
 
   await userModel.updateUser(user.id, {
     refresh_token_hash: tokenHash,
@@ -517,4 +522,31 @@ export async function blockUser(req: Request, res: Response) {
   if (!updated) return res.status(404).json({ error: "not found" });
   delete (updated as any).password_hash;
   res.json(updated);
+}
+
+// Admin: reset a user's password to a generated one-time temporary password
+export async function adminResetPassword(req: Request, res: Response) {
+  const id = String(req.params.id || "");
+  const existing = await userModel.getUserById(id);
+  if (!existing) return res.status(404).json({ error: "not found" });
+
+  // generate a secure temporary password
+  const alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+  let temp = "";
+  for (let i = 0; i < 12; i++) {
+    const idx = Math.floor(Math.random() * alphabet.length);
+    temp += alphabet[idx];
+  }
+
+  const hash = await bcrypt.hash(temp, SALT_ROUNDS);
+  const updated = await userModel.updateUser(id, { password_hash: hash });
+  if (!updated)
+    return res.status(500).json({ error: "failed to update password" });
+
+  // do not leak stored password_hash
+  delete (updated as any).password_hash;
+
+  // return one-time plaintext temporary password to the caller (admin)
+  res.json({ ok: true, tempPassword: temp });
 }
