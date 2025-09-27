@@ -228,8 +228,22 @@ If you have any questions, contact our IT team.
 -- MaxHacker IT Team`;
 
   if (!smtpTransporter) {
+    const missingVars = [];
+    if (!smtpHost) missingVars.push("SMTP_HOST");
+    if (!smtpPort) missingVars.push("SMTP_PORT");
+    if (!smtpUser) missingVars.push("SMTP_USER");
+    if (!smtpPass) missingVars.push("SMTP_PASS");
+
+    console.error("[SES] SMTP configuration missing for Employee email", {
+      missingVars,
+      hasHost: !!smtpHost,
+      hasPort: !!smtpPort,
+      hasUser: !!smtpUser,
+      hasPass: !!smtpPass,
+    });
+
     throw new Error(
-      "SMTP configuration missing: please set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS"
+      `SMTP configuration missing: ${missingVars.join(", ")}. Please set these environment variables.`
     );
   }
 
@@ -240,7 +254,10 @@ If you have any questions, contact our IT team.
       username,
       method: "smtp",
       host: smtpHost,
+      port: smtpPort,
       retryCount,
+      hasTransporter: !!smtpTransporter,
+      smtpConfigured: !!(smtpHost && smtpPort && smtpUser && smtpPass),
     });
 
     const info = await smtpTransporter.sendMail({

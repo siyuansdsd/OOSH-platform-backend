@@ -86,12 +86,21 @@ export async function adminCreate(req: Request, res: Response) {
   });
 
   // Send welcome email for Employee role creation
+  console.info("[adminCreate] Email check conditions", {
+    role,
+    roleIsEmployee: role === "Employee",
+    email: email ? email.replace(/(.{1}).+(@.+)/, "$1***$2") : "NO EMAIL",
+    blocked: !!blocked,
+    shouldSendEmail: role === "Employee" && email && !blocked,
+  });
+
   if (role === "Employee" && email && !blocked) {
     try {
       console.info("[adminCreate] Sending welcome email to Employee", {
         email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
         username,
         role,
+        to: email,
       });
 
       await sendEmployeeWelcomeEmail(email, username, password);
@@ -105,10 +114,21 @@ export async function adminCreate(req: Request, res: Response) {
         email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
         username,
         error: emailError?.message ?? String(emailError),
+        stack: emailError?.stack,
       });
       // Continue with account creation even if email fails
       // The admin will see the error in logs and can manually send credentials
     }
+  } else {
+    console.info("[adminCreate] Email not sent - conditions not met", {
+      role,
+      hasEmail: !!email,
+      isBlocked: !!blocked,
+      reason: !role ? "no role" :
+              role !== "Employee" ? "role is not Employee" :
+              !email ? "no email provided" :
+              blocked ? "account is blocked" : "unknown"
+    });
   }
 
   delete (u as any).password_hash;
