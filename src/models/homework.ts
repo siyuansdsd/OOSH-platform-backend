@@ -324,89 +324,115 @@ export async function listHomeworksBySchool(school: string, limit = 100) {
 }
 
 export async function deleteHomework(id: string) {
-  const existing = await getHomework(id);
-  if (!existing) return;
-
-  // Collect S3 keys from images/videos/urls fields (if they reference this bucket)
-  function extractS3Key(possibleUrl: string): string | null {
-    if (!possibleUrl) return null;
-    // if it's already a key (no protocol), assume it's a key
-    if (!possibleUrl.startsWith("http")) return possibleUrl;
-    // try to find amazonaws.com/ and take the rest as key
-    const marker = ".amazonaws.com/";
-    const idx = possibleUrl.indexOf(marker);
-    if (idx >= 0) return possibleUrl.slice(idx + marker.length);
-    // fallback: if URL contains bucket.s3..., attempt split at bucket name
-    if (BUCKET && possibleUrl.includes(BUCKET)) {
-      const i = possibleUrl.indexOf(BUCKET);
-      const after = possibleUrl.slice(i + BUCKET.length + 1);
-      return after || null;
+  try {
+    const existing = await getHomework(id);
+    if (!existing) {
+      console.info("[deleteHomework] not found", { id });
+      return;
     }
-    return null;
-  }
 
-  const keys = new Set<string>();
-  const collect = (arr?: any[]) => {
-    if (Array.isArray(arr)) {
-      for (const u of arr) {
-        const k = extractS3Key(String(u || ""));
-        if (k) keys.add(k);
+    console.info("[deleteHomework] start", { id, bucket: BUCKET });
+
+    // Collect S3 keys from images/videos/urls fields (if they reference this bucket)
+    function extractS3Key(possibleUrl: string): string | null {
+      if (!possibleUrl) return null;
+      // if it's already a key (no protocol), assume it's a key
+      if (!possibleUrl.startsWith("http")) return possibleUrl;
+      // try to find amazonaws.com/ and take the rest as key
+      const marker = ".amazonaws.com/";
+      const idx = possibleUrl.indexOf(marker);
+      if (idx >= 0) return possibleUrl.slice(idx + marker.length);
+      // fallback: if URL contains bucket.s3..., attempt split at bucket name
+      if (BUCKET && possibleUrl.includes(BUCKET)) {
+        const i = possibleUrl.indexOf(BUCKET);
+        const after = possibleUrl.slice(i + BUCKET.length + 1);
+        return after || null;
       }
+      return null;
     }
-  };
 
-  collect(existing.images);
-  collect(existing.videos);
-  collect(existing.urls);
+    const keys = new Set<string>();
+    const collect = (arr?: any[]) => {
+      if (Array.isArray(arr)) {
+        for (const u of arr) {
+          const k = extractS3Key(String(u || ""));
+          if (k) keys.add(k);
+        }
+      }
+    };
 
-  // batch delete S3 objects if any
-  if (keys.size > 0 && BUCKET) {
-    const Objects = Array.from(keys).map((Key) => ({ Key }));
-    try {
-      const result = await s3
-        .deleteObjects({
-          Bucket: BUCKET,
-          Delete: { Objects },
-        })
-        .promise();
-      if (result && (result as any).Errors && (result as any).Errors.length) {
-        console.error(
-          "s3.deleteObjects reported errors",
-          (result as any).Errors
-        );
-        // attempt single deletes for failed keys
-        for (const errItem of (result as any).Errors) {
+    collect(existing.images);
+    collect(existing.videos);
+    collect(existing.urls);
+
+    // batch delete S3 objects if any
+    if (keys.size > 0 && BUCKET) {
+      const Objects = Array.from(keys).map((Key) => ({ Key }));
+      try {
+        const result = await s3
+          .deleteObjects({
+            Bucket: BUCKET,
+            Delete: { Objects },
+          })
+          .promise();
+        if (result && (result as any).Errors && (result as any).Errors.length) {
+          console.error(
+            "s3.deleteObjects reported errors",
+            (result as any).Errors
+          );
+          // attempt single deletes for failed keys
+          for (const errItem of (result as any).Errors) {
+            try {
+              await s3
+                .deleteObject({ Bucket: BUCKET, Key: errItem.Key })
+                .promise();
+            } catch (e) {
+              console.error(
+                "failed to delete s3 object during retry",
+                errItem.Key,
+                e
+              );
+            }
+          }
+        }
+      } catch (err) {
+        // fallback: attempt individual deletes and continue
+        console.error("bulk s3 delete failed, attempting singles", err);
+        for (const k of Objects) {
           try {
-            await s3
-              .deleteObject({ Bucket: BUCKET, Key: errItem.Key })
-              .promise();
+            await s3.deleteObject({ Bucket: BUCKET, Key: k.Key }).promise();
           } catch (e) {
-            console.error(
-              "failed to delete s3 object during retry",
-              errItem.Key,
-              e
-            );
+            console.error("failed to delete s3 object", k.Key, e);
           }
         }
       }
-    } catch (err) {
-      // fallback: attempt individual deletes and continue
-      console.error("bulk s3 delete failed, attempting singles", err);
-      for (const k of Objects) {
-        try {
-          await s3.deleteObject({ Bucket: BUCKET, Key: k.Key }).promise();
-        } catch (e) {
-          console.error("failed to delete s3 object", k.Key, e);
-        }
-      }
     }
-  }
 
-  // delete main item
-  await ddb
-    .delete({
-      TableName: TABLE,
-      Key: { PK: `HOMEWORK#${existing.id}`, SK: `META#${existing.created_at}` },
-    })
-    .promise();
+    // delete main item
+    try {
+      await ddb
+        .delete({
+          TableName: TABLE,
+          Key: {
+            PK: `HOMEWORK#${existing.id}`,
+            SK: `META#${existing.created_at}`,
+          },
+        })
+        .promise();
+      console.info("[deleteHomework] deleted dynamodb item", { id });
+    } catch (ddbErr) {
+      console.error("[deleteHomework] dynamodb delete failed", {
+        id,
+        err: ddbErr,
+      });
+      throw ddbErr;
+    }
+    return;
+  } catch (err) {
+    console.error("[deleteHomework] failed", {
+      id,
+      err: (err as any)?.message || String(err),
+    });
+    throw err;
+  }
 }
