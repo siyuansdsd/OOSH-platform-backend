@@ -76,9 +76,77 @@ export async function getOne(req: Request, res: Response) {
 }
 
 export async function list(req: Request, res: Response) {
-  const limit = Number(req.query.limit) || 100;
-  const rows = await hw.listHomeworks(limit);
-  res.json(rows);
+  // Query params
+  const page = Math.max(1, Number(req.query.page) || 1);
+  // priority: limit > per_page/pageSize
+  const pageSizeRaw =
+    req.query.pageSize || req.query.per_page || req.query.limit;
+  const pageSize = Number(pageSizeRaw) || 12;
+  const school = (req.query.school as string) || undefined;
+  const name = (req.query.name as string) || undefined;
+  const type = (req.query.type as string) || "all"; // media | website | all
+
+  // fetch a bounded number of items for filtering/pagination
+  const maxFetch = Math.min(5000, page * pageSize);
+  let rows: any[] = [];
+  try {
+    // use specialized endpoints when type narrows
+    if (type === "media") {
+      // fetch items that have images/videos/urls
+      rows = await hw.listAllHomeworks(maxFetch);
+      // we'll filter by presence of media below
+    } else if (type === "website") {
+      rows = await hw.listAllHomeworks(maxFetch);
+    } else {
+      rows = await hw.listAllHomeworks(maxFetch);
+    }
+  } catch (err: any) {
+    return res.status(500).json({ error: "failed to list homeworks" });
+  }
+
+  // apply server-side filters
+  let filtered = rows;
+  if (school) {
+    filtered = filtered.filter((r: any) => r.school_name === school);
+  }
+  if (type === "media") {
+    filtered = filtered.filter(
+      (r: any) => r.has_images || r.has_videos || r.has_urls
+    );
+  } else if (type === "website") {
+    filtered = filtered.filter((r: any) => r.urls && r.urls.length > 0);
+  }
+  if (name) {
+    const q = name.toLowerCase();
+    filtered = filtered.filter((r: any) => {
+      return (
+        (r.title && r.title.toLowerCase().includes(q)) ||
+        (r.group_name && r.group_name.toLowerCase().includes(q)) ||
+        (r.person_name && r.person_name.toLowerCase().includes(q))
+      );
+    });
+  }
+
+  // ensure sort by created_at desc
+  filtered.sort((a: any, b: any) => {
+    const A = a.created_at || "";
+    const B = b.created_at || "";
+    if (A === B) return 0;
+    return A < B ? 1 : -1;
+  });
+
+  const total = filtered.length;
+  const start = (page - 1) * pageSize;
+  const end = start + pageSize;
+  const items = filtered.slice(start, end);
+
+  res.json({
+    items,
+    total,
+    page,
+    pageSize,
+    hasMore: end < total,
+  });
 }
 
 export async function listByPerson(req: Request, res: Response) {
