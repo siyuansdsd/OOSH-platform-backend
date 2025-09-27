@@ -26,5 +26,10 @@ router.post(
   requireRole("Admin"),
   ctrl.adminResetPassword
 );
+router.post(
+  "/batch-reset-passwords",
+  requireRole("Admin"),
+  ctrl.adminBatchResetTemporaryPasswords
+);
 
 export default router;

@@ -13,6 +13,7 @@ import {
 } from "../utils/refreshTokens.js";
 import { sendEmployeeWelcomeEmail } from "../utils/ses.js";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 
 const SALT_ROUNDS = 10;
 
@@ -549,4 +550,31 @@ export async function adminResetPassword(req: Request, res: Response) {
 
   // return one-time plaintext temporary password to the caller (admin)
   res.json({ ok: true, tempPassword: temp });
+}
+
+// Admin: batch reset passwords for all Temporary users and return one-time plaintexts
+export async function adminBatchResetTemporaryPasswords(
+  req: Request,
+  res: Response
+) {
+  // fetch a reasonably large set; adjust if you have >10k users
+  const users = await userModel.listUsers(10000);
+  const temps = (users || []).filter((u: any) => u.role === "Temporary");
+  const results: Array<any> = [];
+
+  for (const u of temps) {
+    // generate a secure temporary password (12 bytes -> base64 string)
+    const tempPassword = randomBytes(12).toString("base64");
+    const hash = await bcrypt.hash(tempPassword, SALT_ROUNDS);
+    await userModel.updateUser(u.id, { password_hash: hash });
+    results.push({
+      id: u.id,
+      username: u.username,
+      display_name: u.display_name,
+      email: u.email,
+      tempPassword,
+    });
+  }
+
+  res.json({ ok: true, count: results.length, users: results });
 }
