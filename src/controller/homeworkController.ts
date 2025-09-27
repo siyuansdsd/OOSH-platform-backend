@@ -87,7 +87,8 @@ export async function list(req: Request, res: Response) {
   const type = (req.query.type as string) || "all"; // media | website | all
 
   // fetch a bounded number of items for filtering/pagination
-  const maxFetch = Math.min(5000, page * pageSize);
+  // fetch one extra item beyond the page window so we can detect if there's more
+  const maxFetch = Math.min(5000, page * pageSize + 1);
   let rows: any[] = [];
   try {
     // use specialized endpoints when type narrows
@@ -140,12 +141,15 @@ export async function list(req: Request, res: Response) {
   const end = start + pageSize;
   const items = filtered.slice(start, end);
 
+  // hasMore is true when we fetched more items than the current page window
+  const hasMore = filtered.length > page * pageSize;
+
   res.json({
     items,
     total,
     page,
     pageSize,
-    hasMore: end < total,
+    hasMore,
   });
 }
 
