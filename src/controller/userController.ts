@@ -76,25 +76,39 @@ export async function adminCreate(req: Request, res: Response) {
   const existing = await userModel.getUserByUsername(username);
   if (existing) return res.status(409).json({ error: "username exists" });
   const hash = await bcrypt.hash(password, SALT_ROUNDS);
+
+  // Normalize role to proper casing
+  const normalizedRole = role ?
+    role.toLowerCase() === "employee" ? "Employee" :
+    role.toLowerCase() === "admin" ? "Admin" :
+    role.toLowerCase() === "user" ? "User" :
+    role.toLowerCase() === "temporary" ? "Temporary" :
+    role : "User";
+
   const u = await userModel.createUser({
     username,
     display_name,
     email,
     password_hash: hash,
-    role: role || "User",
+    role: normalizedRole,
     blocked: !!blocked,
   });
 
   // Send welcome email for Employee role creation
+  const roleNormalized = role?.toLowerCase();
+  const isEmployeeRole = roleNormalized === "employee";
+
   console.info("[adminCreate] Email check conditions", {
-    role,
-    roleIsEmployee: role === "Employee",
+    originalRole: role,
+    normalizedRole: normalizedRole,
+    roleNormalized,
+    roleIsEmployee: isEmployeeRole,
     email: email ? email.replace(/(.{1}).+(@.+)/, "$1***$2") : "NO EMAIL",
     blocked: !!blocked,
-    shouldSendEmail: role === "Employee" && email && !blocked,
+    shouldSendEmail: isEmployeeRole && email && !blocked,
   });
 
-  if (role === "Employee" && email && !blocked) {
+  if (isEmployeeRole && email && !blocked) {
     try {
       console.info("[adminCreate] Sending welcome email to Employee", {
         email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
@@ -122,10 +136,11 @@ export async function adminCreate(req: Request, res: Response) {
   } else {
     console.info("[adminCreate] Email not sent - conditions not met", {
       role,
+      roleNormalized,
       hasEmail: !!email,
       isBlocked: !!blocked,
       reason: !role ? "no role" :
-              role !== "Employee" ? "role is not Employee" :
+              !isEmployeeRole ? `role '${role}' is not Employee (case-insensitive)` :
               !email ? "no email provided" :
               blocked ? "account is blocked" : "unknown"
     });
