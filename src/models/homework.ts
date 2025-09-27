@@ -53,9 +53,13 @@ function validateRequiredFields(
     missing.push("description");
   if (!h.school_name) {
     missing.push("school_name");
-  } else if (!ALLOWED_HOMEWORK_SCHOOLS.includes(h.school_name as HomeworkSchool)) {
+  } else if (
+    !ALLOWED_HOMEWORK_SCHOOLS.includes(h.school_name as HomeworkSchool)
+  ) {
     throw new Error(
-      `Invalid school_name. Allowed schools: ${ALLOWED_HOMEWORK_SCHOOLS.join(", ")}`
+      `Invalid school_name. Allowed schools: ${ALLOWED_HOMEWORK_SCHOOLS.join(
+        ", "
+      )}`
     );
   }
   // conditional: team requires group_name + members; personal requires person_name
@@ -359,13 +363,32 @@ export async function deleteHomework(id: string) {
   if (keys.size > 0 && BUCKET) {
     const Objects = Array.from(keys).map((Key) => ({ Key }));
     try {
-      await s3
+      const result = await s3
         .deleteObjects({
-          TableName: undefined as any,
           Bucket: BUCKET,
           Delete: { Objects },
-        } as any)
+        })
         .promise();
+      if (result && (result as any).Errors && (result as any).Errors.length) {
+        console.error(
+          "s3.deleteObjects reported errors",
+          (result as any).Errors
+        );
+        // attempt single deletes for failed keys
+        for (const errItem of (result as any).Errors) {
+          try {
+            await s3
+              .deleteObject({ Bucket: BUCKET, Key: errItem.Key })
+              .promise();
+          } catch (e) {
+            console.error(
+              "failed to delete s3 object during retry",
+              errItem.Key,
+              e
+            );
+          }
+        }
+      }
     } catch (err) {
       // fallback: attempt individual deletes and continue
       console.error("bulk s3 delete failed, attempting singles", err);

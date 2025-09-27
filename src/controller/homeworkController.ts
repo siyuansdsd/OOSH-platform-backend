@@ -6,14 +6,10 @@ export async function create(req: Request, res: Response) {
   const id = uuidv4();
   const payload = req.body;
   const now = new Date().toISOString();
-  const title =
-    typeof payload.title === "string" ? payload.title.trim() : "";
+  const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const description =
-    typeof payload.description === "string"
-      ? payload.description.trim()
-      : "";
-  if (!title)
-    return res.status(400).json({ error: "title required" });
+    typeof payload.description === "string" ? payload.description.trim() : "";
+  if (!title) return res.status(400).json({ error: "title required" });
   if (!description)
     return res.status(400).json({ error: "description required" });
   // determine is_team: prefer explicit flag, otherwise infer from payload
@@ -137,6 +133,14 @@ export async function update(req: Request, res: Response) {
 export async function remove(req: Request, res: Response) {
   const id = req.params.id;
   if (!id) return res.status(400).json({ error: "id required" });
-  await hw.deleteHomework(id);
-  res.status(204).send();
+  try {
+    await hw.deleteHomework(id);
+    res.status(204).send();
+  } catch (err: any) {
+    console.error("[remove] failed to delete homework", {
+      id,
+      err: err?.message || String(err),
+    });
+    return res.status(500).json({ error: "failed to delete homework" });
+  }
 }
