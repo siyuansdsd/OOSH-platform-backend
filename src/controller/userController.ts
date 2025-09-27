@@ -67,6 +67,8 @@ export async function register(req: Request, res: Response) {
 
 // admin can create any role (including Admin)
 export async function adminCreate(req: Request, res: Response) {
+  // DEBUG: log body to diagnose client payload issues (remove in production)
+  console.debug('[adminCreate] req.body:', req.body);
   const { username, password, display_name, email, role, blocked } =
     req.body || {};
   if (!username || !password)
