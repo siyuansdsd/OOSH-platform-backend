@@ -21,7 +21,7 @@ router.post(
 router.put(
   "/:id",
   authMiddleware,
-  requireRole("Admin", "Employee"),
+  requireRole("Admin", "Employee", "Temporary"),
   ctrl.update
 );
 router.delete(
