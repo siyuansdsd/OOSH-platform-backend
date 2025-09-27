@@ -67,8 +67,6 @@ export async function register(req: Request, res: Response) {
 
 // admin can create any role (including Admin)
 export async function adminCreate(req: Request, res: Response) {
-  // DEBUG: log body to diagnose client payload issues (remove in production)
-  console.debug('[adminCreate] req.body:', req.body);
   const { username, password, display_name, email, role, blocked } =
     req.body || {};
   if (!username || !password)
@@ -98,52 +96,18 @@ export async function adminCreate(req: Request, res: Response) {
   const roleNormalized = role?.toLowerCase();
   const isEmployeeRole = roleNormalized === "employee";
 
-  console.info("[adminCreate] Email check conditions", {
-    originalRole: role,
-    normalizedRole: normalizedRole,
-    roleNormalized,
-    roleIsEmployee: isEmployeeRole,
-    email: email ? email.replace(/(.{1}).+(@.+)/, "$1***$2") : "NO EMAIL",
-    blocked: !!blocked,
-    shouldSendEmail: isEmployeeRole && email && !blocked,
-  });
-
   if (isEmployeeRole && email && !blocked) {
     try {
-      console.info("[adminCreate] Sending welcome email to Employee", {
-        email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
-        username,
-        role,
-        to: email,
-      });
-
       await sendEmployeeWelcomeEmail(email, username, password);
-
-      console.info("[adminCreate] Welcome email sent successfully", {
-        email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
-        username,
-      });
     } catch (emailError: any) {
       console.error("[adminCreate] Failed to send welcome email", {
         email: email.replace(/(.{1}).+(@.+)/, "$1***$2"),
         username,
         error: emailError?.message ?? String(emailError),
-        stack: emailError?.stack,
       });
       // Continue with account creation even if email fails
       // The admin will see the error in logs and can manually send credentials
     }
-  } else {
-    console.info("[adminCreate] Email not sent - conditions not met", {
-      role,
-      roleNormalized,
-      hasEmail: !!email,
-      isBlocked: !!blocked,
-      reason: !role ? "no role" :
-              !isEmployeeRole ? `role '${role}' is not Employee (case-insensitive)` :
-              !email ? "no email provided" :
-              blocked ? "account is blocked" : "unknown"
-    });
   }
 
   delete (u as any).password_hash;

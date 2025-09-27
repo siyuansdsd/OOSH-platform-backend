@@ -228,37 +228,12 @@ If you have any questions, contact our IT team.
 -- MaxHacker IT Team`;
 
   if (!smtpTransporter) {
-    const missingVars = [];
-    if (!smtpHost) missingVars.push("SMTP_HOST");
-    if (!smtpPort) missingVars.push("SMTP_PORT");
-    if (!smtpUser) missingVars.push("SMTP_USER");
-    if (!smtpPass) missingVars.push("SMTP_PASS");
-
-    console.error("[SES] SMTP configuration missing for Employee email", {
-      missingVars,
-      hasHost: !!smtpHost,
-      hasPort: !!smtpPort,
-      hasUser: !!smtpUser,
-      hasPass: !!smtpPass,
-    });
-
     throw new Error(
-      `SMTP configuration missing: ${missingVars.join(", ")}. Please set these environment variables.`
+      "SMTP configuration missing: please set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS"
     );
   }
 
   try {
-    console.info("[SES] sendEmployeeWelcomeEmail attempt", {
-      to: maskEmail(to),
-      from: maskEmail(from),
-      username,
-      method: "smtp",
-      host: smtpHost,
-      port: smtpPort,
-      retryCount,
-      hasTransporter: !!smtpTransporter,
-      smtpConfigured: !!(smtpHost && smtpPort && smtpUser && smtpPass),
-    });
 
     const info = await smtpTransporter.sendMail({
       from: {
@@ -271,14 +246,6 @@ If you have any questions, contact our IT team.
       html: bodyHtml,
     });
 
-    console.info("[SES] sendEmployeeWelcomeEmail success", {
-      to: maskEmail(to),
-      username,
-      method: "smtp",
-      messageId: (info as any)?.messageId,
-      response: (info as any)?.response,
-      retryCount,
-    });
 
     return info;
   } catch (err: any) {
@@ -292,19 +259,9 @@ If you have any questions, contact our IT team.
 
     // Retry logic - only retry once
     if (retryCount === 0) {
-      console.info("[SES] Retrying sendEmployeeWelcomeEmail (1/1)", {
-        to: maskEmail(to),
-        username,
-      });
-
       try {
         return await sendEmployeeWelcomeEmail(to, username, password, 1);
       } catch (retryErr: any) {
-        console.error("[SES] sendEmployeeWelcomeEmail retry failed", {
-          to: maskEmail(to),
-          username,
-          retryError: retryErr?.message ?? String(retryErr),
-        });
         throw retryErr;
       }
     }
