@@ -44,6 +44,7 @@ function buildPosterUrlFromVideoUrl(url: string) {
 async function downloadToFile(bucket: string, key: string, outPath: string) {
   await fs.promises.mkdir(path.dirname(outPath), { recursive: true });
   return new Promise<void>((resolve, reject) => {
+    console.debug("[videoPoster] downloading video", { bucket, key, outPath });
     const stream = s3.getObject({ Bucket: bucket, Key: key }).createReadStream();
     const file = fs.createWriteStream(outPath);
     let finished = false;
@@ -52,11 +53,17 @@ async function downloadToFile(bucket: string, key: string, outPath: string) {
       finished = true;
       stream.destroy();
       file.destroy();
+      console.error("[videoPoster] download failed", {
+        bucket,
+        key,
+        error: err?.message || String(err),
+      });
       reject(err);
     };
     file.on("finish", () => {
       if (finished) return;
       finished = true;
+      console.debug("[videoPoster] download complete", { bucket, key });
       resolve();
     });
     stream.on("error", onError);
@@ -66,6 +73,7 @@ async function downloadToFile(bucket: string, key: string, outPath: string) {
 }
 
 function extractPosterFrame(inputPath: string, outputPath: string) {
+  console.debug("[videoPoster] extracting frame", { inputPath, outputPath });
   const args = [
     "-y",
     "-ss",
@@ -78,11 +86,17 @@ function extractPosterFrame(inputPath: string, outputPath: string) {
   ];
   const r = spawnSync(FFMPEG_PATH, args, { stdio: "ignore" });
   if (r.status !== 0) {
+    console.error("[videoPoster] ffmpeg exited with error", {
+      status: r.status,
+      signal: r.signal,
+      stderr: r.stderr?.toString?.(),
+    });
     throw new Error(`ffmpeg exited with status ${r.status}`);
   }
 }
 
 async function uploadPoster(bucket: string, key: string, filePath: string) {
+  console.debug("[videoPoster] uploading poster", { bucket, key, filePath });
   const body = await fs.promises.readFile(filePath);
   await s3
     .upload({
@@ -115,11 +129,17 @@ async function ensurePosterForUrl(url: string): Promise<string | null> {
     await downloadToFile(bucket, key, videoPath);
     extractPosterFrame(videoPath, posterPath);
     await uploadPoster(bucket, posterKey, posterPath);
+    console.info("[videoPoster] poster generated", {
+      url,
+      posterKey,
+      posterUrl,
+    });
     return posterUrl;
   } catch (err) {
     console.error("[videoPoster] poster generation failed", {
       url,
       error: (err as any)?.message || String(err),
+      stack: (err as any)?.stack,
     });
     return null;
   } finally {
@@ -145,9 +165,18 @@ export async function ensureVideoPosters(
     const expectedPoster = buildPosterUrlFromVideoUrl(normalized);
     if (expectedPoster && posterSet.has(expectedPoster)) continue;
 
+    console.debug("[videoPoster] ensure poster", {
+      videoUrl: normalized,
+      existingCount: posterSet.size,
+    });
     const posterUrl = await ensurePosterForUrl(normalized);
     if (posterUrl) posterSet.add(posterUrl);
   }
+
+  console.debug("[videoPoster] posters ensured", {
+    totalVideos: urls.length,
+    generated: posterSet.size,
+  });
 
   return Array.from(posterSet);
 }
