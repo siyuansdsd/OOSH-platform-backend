@@ -115,20 +115,6 @@ async function ensurePosterForUrl(url: string): Promise<string | null> {
   const posterKey = buildPosterKey(key);
   const posterUrl = buildPosterUrlFromVideoUrl(url);
 
-  try {
-    await s3.headObject({ Bucket: bucket, Key: posterKey }).promise();
-    return posterUrl;
-  } catch (err: any) {
-    const code = err?.code;
-    if (code && !["NotFound", "404", "NoSuchKey"].includes(code)) {
-      console.error("[videoPoster] headObject failed", {
-        url,
-        error: err.message || String(err),
-      });
-      return null;
-    }
-  }
-
   if (!hasFfmpeg()) {
     console.warn("[videoPoster] ffmpeg unavailable, skip poster generation");
     return null;
@@ -155,15 +141,26 @@ async function ensurePosterForUrl(url: string): Promise<string | null> {
   }
 }
 
-export async function ensureVideoPosters(urls: string[]): Promise<string[]> {
-  const seen = new Set<string>();
-  const posters = new Set<string>();
+export async function ensureVideoPosters(
+  urls: string[],
+  existingPosters: string[] = []
+): Promise<string[]> {
+  const seenVideos = new Set<string>();
+  const posterSet = new Set(
+    (existingPosters || []).map((p) => String(p || "").trim()).filter(Boolean)
+  );
+
   for (const url of urls) {
     const normalized = String(url || "").trim();
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
+    if (!normalized || seenVideos.has(normalized)) continue;
+    seenVideos.add(normalized);
+
+    const expectedPoster = buildPosterUrlFromVideoUrl(normalized);
+    if (expectedPoster && posterSet.has(expectedPoster)) continue;
+
     const posterUrl = await ensurePosterForUrl(normalized);
-    if (posterUrl) posters.add(posterUrl);
+    if (posterUrl) posterSet.add(posterUrl);
   }
-  return Array.from(posters);
+
+  return Array.from(posterSet);
 }

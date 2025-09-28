@@ -70,7 +70,10 @@ export async function create(req: Request, res: Response) {
     let created = await hw.createHomework(item);
     if (Array.isArray(created?.videos) && created.videos.length > 0) {
       try {
-        const posters = await ensureVideoPosters(created.videos);
+        const posters = await ensureVideoPosters(
+          created.videos,
+          created.video_posters || []
+        );
         if (posters.length > 0) {
           created = await hw.updateHomework(id, {
             video_posters: posters,
@@ -246,7 +249,10 @@ export async function update(req: Request, res: Response) {
     if (!updated) return res.status(404).json({ error: "not found" });
     if (Array.isArray(updated?.videos) && updated.videos.length > 0) {
       try {
-        const posters = await ensureVideoPosters(updated.videos);
+        const posters = await ensureVideoPosters(
+          updated.videos,
+          updated.video_posters || []
+        );
         if (posters.length > 0) {
           updated = await hw.updateHomework(id, {
             video_posters: posters,

@@ -226,7 +226,12 @@ export async function createDraftAndPresign(req: Request, res: Response) {
                 ? [...existing.videos, ...toAddVideos]
                 : [...toAddVideos];
             try {
-              const posters = await ensureVideoPosters(posterCandidates);
+              const posters = await ensureVideoPosters(
+                posterCandidates,
+                (existing && Array.isArray(existing.video_posters)
+                  ? existing.video_posters
+                  : []) as string[]
+              );
               if (posters.length > 0) {
                 patch.video_posters = posters;
               }
@@ -578,7 +583,12 @@ export async function uploadMultiHandler(req: Request, res: Response) {
                 ? [...existing.videos, ...toAddVideos]
                 : [...toAddVideos];
             try {
-              const posters = await ensureVideoPosters(posterCandidates);
+              const posters = await ensureVideoPosters(
+                posterCandidates,
+                (existing && Array.isArray(existing.video_posters)
+                  ? existing.video_posters
+                  : []) as string[]
+              );
               if (posters.length > 0) {
                 patch.video_posters = posters;
               }
