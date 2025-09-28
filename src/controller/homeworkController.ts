@@ -241,6 +241,9 @@ export async function update(req: Request, res: Response) {
   const id = req.params.id;
   if (!id) return res.status(400).json({ error: "id required" });
   const patch = req.body;
+  if (patch && Object.prototype.hasOwnProperty.call(patch, "video_posters")) {
+    delete patch.video_posters;
+  }
   if (typeof patch.title === "string") patch.title = patch.title.trim();
   if (typeof patch.description === "string")
     patch.description = patch.description.trim();
@@ -273,6 +276,11 @@ export async function update(req: Request, res: Response) {
     }
     res.json(sanitizeHomeworkRecord(updated));
   } catch (err: any) {
+    console.error("[update] failed", {
+      id,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     return res.status(500).json({ error: err?.message || "update failed" });
   }
 }
