@@ -25,6 +25,7 @@ export type Homework = {
   images?: string[];
   videos?: string[];
   urls?: string[];
+  video_posters?: string[];
   created_at: string;
 };
 
@@ -86,6 +87,12 @@ function validateRequiredFields(
   if ((h as any).urls !== undefined && !Array.isArray((h as any).urls)) {
     throw new Error("urls must be an array of strings");
   }
+  if (
+    (h as any).video_posters !== undefined &&
+    !Array.isArray((h as any).video_posters)
+  ) {
+    throw new Error("video_posters must be an array of strings");
+  }
 
   // ensure at least one of images, videos, urls is present and non-empty when required
   if (opts.requireMedia) {
@@ -116,6 +123,7 @@ export async function createHomework(h: Homework) {
   if (!item.school_id) item.school_id = item.school_name;
   if (Array.isArray(item.images) && item.images.length > 0)
     item.preview = item.images[0];
+  if (!Array.isArray(item.video_posters)) item.video_posters = [];
 
   // set attributes for sparse GSIs
   item.entityType = "HOMEWORK";
@@ -145,6 +153,7 @@ export async function createHomeworkDraft(h: Homework) {
   if (!item.school_id) item.school_id = item.school_name;
   if (Array.isArray(item.images) && item.images.length > 0)
     item.preview = item.images[0];
+  if (!Array.isArray(item.video_posters)) item.video_posters = [];
 
   // set attributes for sparse GSIs
   item.entityType = "HOMEWORK";
@@ -228,6 +237,7 @@ export async function updateHomework(id: string, patch: Partial<Homework>) {
     Array.isArray(updated.images) && updated.images.length > 0
       ? updated.images[0]
       : updated.preview;
+  if (!Array.isArray(updated.video_posters)) updated.video_posters = [];
 
   // write updated main item
   await ddb.put({ TableName: TABLE, Item: updated }).promise();
@@ -384,6 +394,7 @@ export async function deleteHomework(id: string) {
     collect(existing.images);
     collect(existing.videos);
     collect(existing.urls);
+    collect((existing as any).video_posters);
 
     // batch delete S3 objects if any
     if (keys.size > 0 && BUCKET) {

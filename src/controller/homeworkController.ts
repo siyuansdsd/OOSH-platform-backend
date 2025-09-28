@@ -1,6 +1,18 @@
 import { v4 as uuidv4 } from "uuid";
 import * as hw from "../models/homework.js";
 import type { Request, Response } from "express";
+import { ensureVideoPosters } from "../utils/videoPoster.js";
+
+function sanitizeHomeworkRecord(record: any) {
+  if (!record) return record;
+  const cloned = { ...record };
+  delete cloned.video_posters;
+  return cloned;
+}
+
+function sanitizeHomeworkList(records: any[]) {
+  return records.map(sanitizeHomeworkRecord);
+}
 
 export async function create(req: Request, res: Response) {
   const id = uuidv4();
@@ -33,6 +45,7 @@ export async function create(req: Request, res: Response) {
     images: payload.images || [],
     videos: payload.videos || [],
     urls: payload.urls || [],
+    video_posters: [],
     created_at: now,
   };
 
@@ -54,8 +67,23 @@ export async function create(req: Request, res: Response) {
   }
 
   try {
-    const r = await hw.createHomework(item);
-    res.status(201).json(r);
+    let created = await hw.createHomework(item);
+    if (Array.isArray(created?.videos) && created.videos.length > 0) {
+      try {
+        const posters = await ensureVideoPosters(created.videos);
+        if (posters.length > 0) {
+          created = await hw.updateHomework(id, {
+            video_posters: posters,
+          });
+        }
+      } catch (posterErr: any) {
+        console.error("[create] poster generation failed", {
+          id,
+          error: posterErr?.message || String(posterErr),
+        });
+      }
+    }
+    res.status(201).json(sanitizeHomeworkRecord(created));
   } catch (err: any) {
     // model validation errors -> 400
     return res.status(400).json({ error: err.message || String(err) });
@@ -72,7 +100,7 @@ export async function getOne(req: Request, res: Response) {
     return res.status(404).json({ error: "not found" });
   }
   console.debug("[getOne] found homework", { id });
-  res.json(r);
+  res.json(sanitizeHomeworkRecord(r));
 }
 
 export async function list(req: Request, res: Response) {
@@ -141,7 +169,7 @@ export async function list(req: Request, res: Response) {
 
   if (school || name) {
     res.json({
-      items: filtered,
+      items: sanitizeHomeworkList(filtered),
       total,
       page: 1,
       pageSize: total,
@@ -152,7 +180,7 @@ export async function list(req: Request, res: Response) {
 
   const start = (page - 1) * pageSize;
   const end = start + pageSize;
-  const items = filtered.slice(start, end);
+  const items = sanitizeHomeworkList(filtered.slice(start, end));
   const hasMore = filtered.length > page * pageSize;
 
   res.json({
@@ -169,7 +197,7 @@ export async function listByPerson(req: Request, res: Response) {
   if (!person) return res.status(400).json({ error: "person required" });
   const limit = Number(req.query.limit) || 100;
   const rows = await hw.listHomeworksByPerson(person, limit);
-  res.json(rows);
+  res.json(sanitizeHomeworkList(rows));
 }
 
 export async function listByGroup(req: Request, res: Response) {
@@ -177,7 +205,7 @@ export async function listByGroup(req: Request, res: Response) {
   if (!group) return res.status(400).json({ error: "group required" });
   const limit = Number(req.query.limit) || 100;
   const rows = await hw.listHomeworksByGroup(group, limit);
-  res.json(rows);
+  res.json(sanitizeHomeworkList(rows));
 }
 
 export async function listBySchool(req: Request, res: Response) {
@@ -185,25 +213,25 @@ export async function listBySchool(req: Request, res: Response) {
   if (!school) return res.status(400).json({ error: "school required" });
   const limit = Number(req.query.limit) || 100;
   const rows = await hw.listHomeworksBySchool(school, limit);
-  res.json(rows);
+  res.json(sanitizeHomeworkList(rows));
 }
 
 export async function listWithImages(req: Request, res: Response) {
   const limit = Number(req.query.limit) || 100;
   const rows = await hw.listHomeworksWithImages(limit);
-  res.json(rows);
+  res.json(sanitizeHomeworkList(rows));
 }
 
 export async function listWithVideos(req: Request, res: Response) {
   const limit = Number(req.query.limit) || 100;
   const rows = await hw.listHomeworksWithVideos(limit);
-  res.json(rows);
+  res.json(sanitizeHomeworkList(rows));
 }
 
 export async function listWithUrls(req: Request, res: Response) {
   const limit = Number(req.query.limit) || 100;
   const rows = await hw.listHomeworksWithUrls(limit);
-  res.json(rows);
+  res.json(sanitizeHomeworkList(rows));
 }
 
 export async function update(req: Request, res: Response) {
@@ -213,9 +241,34 @@ export async function update(req: Request, res: Response) {
   if (typeof patch.title === "string") patch.title = patch.title.trim();
   if (typeof patch.description === "string")
     patch.description = patch.description.trim();
-  const r = await hw.updateHomework(id, patch as any);
-  if (!r) return res.status(404).json({ error: "not found" });
-  res.json(r);
+  try {
+    let updated = await hw.updateHomework(id, patch as any);
+    if (!updated) return res.status(404).json({ error: "not found" });
+    if (Array.isArray(updated?.videos) && updated.videos.length > 0) {
+      try {
+        const posters = await ensureVideoPosters(updated.videos);
+        if (posters.length > 0) {
+          updated = await hw.updateHomework(id, {
+            video_posters: posters,
+          });
+        }
+      } catch (posterErr: any) {
+        console.error("[update] poster generation failed", {
+          id,
+          error: posterErr?.message || String(posterErr),
+        });
+      }
+    } else if (
+      (!updated?.videos || updated.videos.length === 0) &&
+      Array.isArray(updated?.video_posters) &&
+      updated.video_posters.length > 0
+    ) {
+      updated = await hw.updateHomework(id, { video_posters: [] });
+    }
+    res.json(sanitizeHomeworkRecord(updated));
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "update failed" });
+  }
 }
 
 export async function remove(req: Request, res: Response) {

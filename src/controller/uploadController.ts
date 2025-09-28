@@ -4,6 +4,7 @@ import sharp from "sharp";
 import fs from "fs";
 import path from "path";
 import { spawnSync } from "child_process";
+import { ensureVideoPosters } from "../utils/videoPoster.js";
 
 const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-southeast-1" });
 const BUCKET = process.env.S3_BUCKET || "";
@@ -121,6 +122,7 @@ export async function createDraftAndPresign(req: Request, res: Response) {
     images: [],
     videos: [],
     urls: [],
+    video_posters: [],
     created_at: now,
   };
 
@@ -218,8 +220,26 @@ export async function createDraftAndPresign(req: Request, res: Response) {
           const patch: any = {};
           if (toAddImages.length) patch.images = toAddImages;
           if (toAddVideos.length) patch.videos = toAddVideos;
-          if (Object.keys(patch).length)
+          if (toAddVideos.length) {
+            const posterCandidates =
+              existing && Array.isArray(existing.videos)
+                ? [...existing.videos, ...toAddVideos]
+                : [...toAddVideos];
+            try {
+              const posters = await ensureVideoPosters(posterCandidates);
+              if (posters.length > 0) {
+                patch.video_posters = posters;
+              }
+            } catch (posterErr: any) {
+              console.error("[upload] poster generation failed", {
+                id,
+                error: posterErr?.message || String(posterErr),
+              });
+            }
+          }
+          if (Object.keys(patch).length) {
             await hwModel.updateHomework(id, patch);
+          }
         }
       } catch (e) {
         console.error("failed to update draft with uploaded urls", e);
@@ -551,6 +571,23 @@ export async function uploadMultiHandler(req: Request, res: Response) {
             patch.videos = Array.isArray(existing.videos)
               ? [...existing.videos, ...toAddVideos]
               : toAddVideos;
+          }
+          if (toAddVideos.length) {
+            const posterCandidates =
+              existing && Array.isArray(existing.videos)
+                ? [...existing.videos, ...toAddVideos]
+                : [...toAddVideos];
+            try {
+              const posters = await ensureVideoPosters(posterCandidates);
+              if (posters.length > 0) {
+                patch.video_posters = posters;
+              }
+            } catch (posterErr: any) {
+              console.error("[uploadMulti] poster generation failed", {
+                homeworkId,
+                error: posterErr?.message || String(posterErr),
+              });
+            }
           }
           if (Object.keys(patch).length) {
             await hwModel.updateHomework(homeworkId, patch);
