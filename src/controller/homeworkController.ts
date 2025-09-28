@@ -86,20 +86,15 @@ export async function list(req: Request, res: Response) {
   const name = (req.query.name as string) || undefined;
   const type = (req.query.type as string) || "all"; // media | website | all
 
-  // fetch a bounded number of items for filtering/pagination
-  // fetch one extra item beyond the page window so we can detect if there's more
-  const maxFetch = Math.min(5000, page * pageSize + 1);
+  const SCHOOL_FETCH_LIMIT = 1000;
+  const GLOBAL_FETCH_LIMIT = 1000;
   let rows: any[] = [];
   try {
-    // use specialized endpoints when type narrows
-    if (type === "media") {
-      // fetch items that have images/videos/urls
-      rows = await hw.listAllHomeworks(maxFetch);
-      // we'll filter by presence of media below
-    } else if (type === "website") {
-      rows = await hw.listAllHomeworks(maxFetch);
+    if (school) {
+      // pull a wider set when scoping to a school so search covers all matches
+      rows = await hw.listHomeworksBySchool(school, SCHOOL_FETCH_LIMIT);
     } else {
-      rows = await hw.listAllHomeworks(maxFetch);
+      rows = await hw.listAllHomeworks(GLOBAL_FETCH_LIMIT);
     }
   } catch (err: any) {
     return res.status(500).json({ error: "failed to list homeworks" });
@@ -120,10 +115,16 @@ export async function list(req: Request, res: Response) {
   if (name) {
     const q = name.toLowerCase();
     filtered = filtered.filter((r: any) => {
+      const memberMatch = Array.isArray(r.members)
+        ? r.members.some((m: any) =>
+            typeof m === "string" && m.toLowerCase().includes(q)
+          )
+        : false;
       return (
         (r.title && r.title.toLowerCase().includes(q)) ||
         (r.group_name && r.group_name.toLowerCase().includes(q)) ||
-        (r.person_name && r.person_name.toLowerCase().includes(q))
+        (r.person_name && r.person_name.toLowerCase().includes(q)) ||
+        memberMatch
       );
     });
   }
@@ -137,19 +138,13 @@ export async function list(req: Request, res: Response) {
   });
 
   const total = filtered.length;
-  const start = (page - 1) * pageSize;
-  const end = start + pageSize;
-  const items = filtered.slice(start, end);
-
-  // hasMore is true when we fetched more items than the current page window
-  const hasMore = filtered.length > page * pageSize;
 
   res.json({
-    items,
+    items: filtered,
     total,
-    page,
-    pageSize,
-    hasMore,
+    page: 1,
+    pageSize: total,
+    hasMore: false,
   });
 }
 
