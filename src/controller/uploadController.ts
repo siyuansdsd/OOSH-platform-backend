@@ -10,6 +10,7 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-southeast-1" });
 const BUCKET = process.env.S3_BUCKET || "";
 const FFMPEG_PATH = ffmpegInstaller.path;
+const POSTER_TIMEOUT_MS = Number(process.env.POSTER_FFMPEG_TIMEOUT || "12000");
 
 function slugify(input: string) {
   return (input || "unknown")
@@ -41,6 +42,16 @@ function makeKey({
   const safeName = slugify(filename.replace(/\s+/g, "-"));
   // template: school/{schoolSlug}/{YYYY}/{MM}/{timestamp}/{groupSlug}/{homeworkId}/{timestamp}-{slugifiedFilename}
   return `school/${school}/${y}/${m}/${ts}/${group}/${homeworkId}/${ts}-${safeName}`;
+}
+
+function buildPosterKeyFromVideoKey(key: string) {
+  const dot = key.lastIndexOf(".");
+  if (dot === -1) return `${key}.png`;
+  return `${key.slice(0, dot)}.png`;
+}
+
+function buildS3FileUrl(key: string) {
+  return `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
 }
 
 export async function presignHandler(req: Request, res: Response) {
@@ -139,6 +150,8 @@ export async function createDraftAndPresign(req: Request, res: Response) {
   const multipartFiles = (req.files as Express.Multer.File[] | undefined) || [];
   if (multipartFiles && multipartFiles.length > 0) {
     const results: Array<any> = [];
+    const posterUrls: string[] = [];
+    const pendingPosterVideos: string[] = [];
     try {
       for (const file of multipartFiles) {
         const filename = file.originalname || `file-${Date.now()}`;
@@ -149,6 +162,7 @@ export async function createDraftAndPresign(req: Request, res: Response) {
         let uploadBuffer: Buffer = file.buffer;
         let uploadContentType = contentType;
         let compressed = false;
+        let posterBuffer: Buffer | undefined;
 
         if (isImage) {
           const r = await compressImageBuffer(file.buffer, contentType);
@@ -158,13 +172,18 @@ export async function createDraftAndPresign(req: Request, res: Response) {
         } else if (isVideo) {
           if (hasFfmpeg()) {
             try {
-              const out = await compressVideoBufferToMp4(file.buffer);
-              uploadBuffer = out;
-              uploadContentType = "video/mp4";
-              compressed = true;
+              const processed = await processVideoBuffer(
+                file.buffer,
+                contentType
+              );
+              uploadBuffer = processed.buffer;
+              uploadContentType = processed.contentType;
+              compressed = processed.contentType === "video/mp4";
+              posterBuffer = processed.poster;
             } catch (e) {
-              console.error("video compress failed, uploading original", e);
+              console.error("video processing failed, uploading original", e);
               uploadBuffer = file.buffer;
+              uploadContentType = contentType;
             }
           } else {
             uploadBuffer = file.buffer;
@@ -184,15 +203,42 @@ export async function createDraftAndPresign(req: Request, res: Response) {
           ContentType: uploadContentType,
         } as AWS.S3.PutObjectRequest;
         const uploaded = await s3.upload(params).promise();
-        const fileUrl = `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
+        const fileUrl = buildS3FileUrl(key);
 
-        results.push({
+        let posterUrl: string | undefined;
+        if (posterBuffer) {
+          const posterKey = buildPosterKeyFromVideoKey(key);
+          try {
+            await s3
+              .upload({
+                Bucket: BUCKET,
+                Key: posterKey,
+                Body: posterBuffer,
+                ContentType: "image/png",
+              })
+              .promise();
+            posterUrl = buildS3FileUrl(posterKey);
+            posterUrls.push(posterUrl);
+          } catch (posterUploadErr: any) {
+            console.error("[upload] failed to upload poster", {
+              key: posterKey,
+              error: posterUploadErr?.message || String(posterUploadErr),
+            });
+            if (isVideo) pendingPosterVideos.push(fileUrl);
+          }
+        } else if (isVideo) {
+          pendingPosterVideos.push(fileUrl);
+        }
+
+        const entry: any = {
           filename,
           key,
           fileUrl,
           location: (uploaded as any).Location,
           compressed,
-        });
+        };
+        if (posterUrl) entry.posterUrl = posterUrl;
+        results.push(entry);
       }
 
       // update homework with uploaded urls
@@ -202,6 +248,7 @@ export async function createDraftAndPresign(req: Request, res: Response) {
         if (existing) {
           const toAddImages: string[] = [];
           const toAddVideos: string[] = [];
+          const toAddPosters: string[] = [...posterUrls];
           for (const r of results) {
             if (r.fileUrl) {
               if (
@@ -219,30 +266,37 @@ export async function createDraftAndPresign(req: Request, res: Response) {
               }
             }
           }
-          const patch: any = {};
-          if (toAddImages.length) patch.images = toAddImages;
-          if (toAddVideos.length) patch.videos = toAddVideos;
-          if (toAddVideos.length) {
-            const posterCandidates =
-              existing && Array.isArray(existing.videos)
-                ? [...existing.videos, ...toAddVideos]
-                : [...toAddVideos];
+
+          if (pendingPosterVideos.length) {
             try {
               const posters = await ensureVideoPosters(
-                posterCandidates,
+                pendingPosterVideos,
                 (existing && Array.isArray(existing.video_posters)
                   ? existing.video_posters
                   : []) as string[]
               );
-              if (posters.length > 0) {
-                patch.video_posters = posters;
+              for (const poster of posters) {
+                if (!toAddPosters.includes(poster)) toAddPosters.push(poster);
               }
             } catch (posterErr: any) {
-              console.error("[upload] poster generation failed", {
+              console.error("[upload] fallback poster generation failed", {
                 id,
                 error: posterErr?.message || String(posterErr),
               });
             }
+          }
+
+          const patch: any = {};
+          if (toAddImages.length) patch.images = toAddImages;
+          if (toAddVideos.length) patch.videos = toAddVideos;
+          if (toAddPosters.length) {
+            const existingPosters = Array.isArray(existing.video_posters)
+              ? existing.video_posters
+              : [];
+            const merged = Array.from(
+              new Set([...existingPosters, ...toAddPosters])
+            );
+            patch.video_posters = merged;
           }
           if (Object.keys(patch).length) {
             await hwModel.updateHomework(id, patch);
@@ -343,16 +397,34 @@ function hasFfmpeg() {
   return !!FFMPEG_PATH;
 }
 
-async function compressVideoBufferToMp4(inputBuffer: Buffer): Promise<Buffer> {
-  // This requires ffmpeg binary available on the runtime (Lambda layer or container).
-  // Use /tmp for intermediate files.
+async function processVideoBuffer(
+  inputBuffer: Buffer,
+  originalContentType: string
+): Promise<{
+  buffer: Buffer;
+  contentType: string;
+  poster?: Buffer;
+}> {
+  if (!FFMPEG_PATH) {
+    console.warn("[upload] ffmpeg not available; skipping compression/poster");
+    return { buffer: inputBuffer, contentType: originalContentType };
+  }
+
   const tmpDir = "/tmp";
-  const inPath = path.join(tmpDir, `in-${Date.now()}`);
-  const outPath = path.join(tmpDir, `out-${Date.now()}.mp4`);
+  const base = `video-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const inPath = path.join(tmpDir, `${base}-in`);
+  const outPath = path.join(tmpDir, `${base}-out.mp4`);
+  const posterPath = path.join(tmpDir, `${base}-poster.png`);
+
+  let outputBuffer = inputBuffer;
+  let outputContentType = originalContentType || "application/octet-stream";
+  let posterBuffer: Buffer | undefined;
+  let posterSourcePath = inPath;
+
+  await fs.promises.writeFile(inPath, inputBuffer);
+
   try {
-    await fs.promises.writeFile(inPath, inputBuffer);
-    // basic transcode command: libx264, reasonable CRF for size/quality tradeoff
-    const args = [
+    const transcodeArgs = [
       "-y",
       "-i",
       inPath,
@@ -370,23 +442,92 @@ async function compressVideoBufferToMp4(inputBuffer: Buffer): Promise<Buffer> {
       "+faststart",
       outPath,
     ];
-    const r = spawnSync(FFMPEG_PATH, args, {
-      stdio: "inherit",
+
+    const transcode = spawnSync(FFMPEG_PATH, transcodeArgs, {
+      stdio: "ignore",
       timeout: 120000,
     });
-    if (r.status !== 0) {
-      throw new Error(`ffmpeg failed with code ${r.status}`);
+
+    if (!transcode.error && transcode.status === 0) {
+      try {
+        outputBuffer = await fs.promises.readFile(outPath);
+        outputContentType = "video/mp4";
+        posterSourcePath = outPath;
+      } catch (readErr: any) {
+        console.error("[upload] failed to read transcoded video", {
+          error: readErr?.message || String(readErr),
+        });
+        outputBuffer = inputBuffer;
+        outputContentType = originalContentType || "application/octet-stream";
+        posterSourcePath = inPath;
+      }
+    } else {
+      if (transcode.error) {
+        console.error("[upload] ffmpeg transcode error", {
+          error: transcode.error?.message || String(transcode.error),
+        });
+      } else {
+        console.error("[upload] ffmpeg transcode failed", {
+          status: transcode.status,
+          signal: transcode.signal,
+        });
+      }
+      outputBuffer = inputBuffer;
+      outputContentType = originalContentType || "application/octet-stream";
+      posterSourcePath = inPath;
     }
-    const outBuf = await fs.promises.readFile(outPath);
-    return outBuf;
+
+    const posterArgs = [
+      "-y",
+      "-ss",
+      "0.5",
+      "-i",
+      posterSourcePath,
+      "-frames:v",
+      "1",
+      posterPath,
+    ];
+    const poster = spawnSync(FFMPEG_PATH, posterArgs, {
+      stdio: "ignore",
+      timeout: POSTER_TIMEOUT_MS,
+    });
+    if (!poster.error && poster.status === 0) {
+      try {
+        posterBuffer = await fs.promises.readFile(posterPath);
+      } catch (posterReadErr: any) {
+        console.error("[upload] failed to read poster frame", {
+          error: posterReadErr?.message || String(posterReadErr),
+        });
+      }
+    } else {
+      if (poster.error) {
+        console.error("[upload] ffmpeg poster error", {
+          error: poster.error?.message || String(poster.error),
+        });
+      } else {
+        console.error("[upload] ffmpeg poster failed", {
+          status: poster.status,
+          signal: poster.signal,
+        });
+      }
+    }
+
+    const result: {
+      buffer: Buffer;
+      contentType: string;
+      poster?: Buffer;
+    } = {
+      buffer: outputBuffer,
+      contentType: outputContentType,
+    };
+    if (posterBuffer) {
+      result.poster = posterBuffer;
+    }
+    return result;
   } finally {
-    // cleanup
-    try {
-      await fs.promises.unlink(inPath).catch(() => {});
-      await fs.promises.unlink(outPath).catch(() => {});
-    } catch (e) {
-      // ignore
-    }
+    await fs.promises.unlink(inPath).catch(() => {});
+    await fs.promises.unlink(outPath).catch(() => {});
+    await fs.promises.unlink(posterPath).catch(() => {});
   }
 }
 
@@ -408,6 +549,7 @@ export async function uploadHandler(req: Request, res: Response) {
   try {
     let uploadBuffer: Buffer | null = null;
     let uploadContentType = contentType;
+    let posterBuffer: Buffer | undefined;
 
     if (isImage) {
       const r = await compressImageBuffer(file.buffer, contentType);
@@ -416,9 +558,10 @@ export async function uploadHandler(req: Request, res: Response) {
     } else if (isVideo) {
       if (hasFfmpeg()) {
         try {
-          const out = await compressVideoBufferToMp4(file.buffer);
-          uploadBuffer = out;
-          uploadContentType = "video/mp4";
+          const processed = await processVideoBuffer(file.buffer, contentType);
+          uploadBuffer = processed.buffer;
+          uploadContentType = processed.contentType;
+          posterBuffer = processed.poster;
         } catch (e) {
           console.error("video compress failed, uploading original", e);
           // fallback to original
@@ -441,13 +584,35 @@ export async function uploadHandler(req: Request, res: Response) {
       ContentType: uploadContentType,
     } as AWS.S3.PutObjectRequest;
     const uploaded = await s3.upload(params).promise();
-    const fileUrl = `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
-    res.json({
+    const fileUrl = buildS3FileUrl(key);
+    let posterUrl: string | undefined;
+    if (posterBuffer) {
+      const posterKey = buildPosterKeyFromVideoKey(key);
+      try {
+        await s3
+          .upload({
+            Bucket: BUCKET,
+            Key: posterKey,
+            Body: posterBuffer,
+            ContentType: "image/png",
+          })
+          .promise();
+        posterUrl = buildS3FileUrl(posterKey);
+      } catch (posterUploadErr: any) {
+        console.error("[uploadHandler] poster upload failed", {
+          key: posterKey,
+          error: posterUploadErr?.message || String(posterUploadErr),
+        });
+      }
+    }
+    const response: any = {
       key,
       fileUrl,
       location: uploaded.Location,
       compressed: isImage || (isVideo && hasFfmpeg()),
-    });
+    };
+    if (posterUrl) response.posterUrl = posterUrl;
+    res.json(response);
   } catch (err) {
     console.error("uploadHandler error", err);
     res.status(500).json({ error: "upload failed" });
@@ -468,11 +633,14 @@ export async function uploadMultiHandler(req: Request, res: Response) {
     fileUrl: string;
     location?: string;
     compressed?: boolean;
+    posterUrl?: string;
     error?: string;
   }> = [];
 
   try {
     // process files sequentially to avoid overwhelming memory/CPU. Could be parallelized with concurrency limit.
+    const posterUrls: string[] = [];
+    const pendingPosterVideos: string[] = [];
     for (const file of files) {
       const filename = file.originalname || `file-${Date.now()}`;
       const contentType = file.mimetype || "application/octet-stream";
@@ -483,6 +651,7 @@ export async function uploadMultiHandler(req: Request, res: Response) {
         let uploadBuffer: Buffer = file.buffer;
         let uploadContentType = contentType;
         let compressed = false;
+        let posterBuffer: Buffer | undefined;
 
         if (isImage) {
           const r = await compressImageBuffer(file.buffer, contentType);
@@ -492,10 +661,14 @@ export async function uploadMultiHandler(req: Request, res: Response) {
         } else if (isVideo) {
           if (hasFfmpeg()) {
             try {
-              const out = await compressVideoBufferToMp4(file.buffer);
-              uploadBuffer = out;
-              uploadContentType = "video/mp4";
-              compressed = true;
+              const processed = await processVideoBuffer(
+                file.buffer,
+                contentType
+              );
+              uploadBuffer = processed.buffer;
+              uploadContentType = processed.contentType;
+              compressed = processed.contentType === "video/mp4";
+              posterBuffer = processed.poster;
             } catch (e) {
               console.error("video compress failed, uploading original", e);
               uploadBuffer = file.buffer;
@@ -520,15 +693,41 @@ export async function uploadMultiHandler(req: Request, res: Response) {
           ContentType: uploadContentType,
         } as AWS.S3.PutObjectRequest;
         const uploaded = await s3.upload(params).promise();
-        const fileUrl = `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
+        const fileUrl = buildS3FileUrl(key);
+        let posterUrl: string | undefined;
+        if (posterBuffer) {
+          const posterKey = buildPosterKeyFromVideoKey(key);
+          try {
+            await s3
+              .upload({
+                Bucket: BUCKET,
+                Key: posterKey,
+                Body: posterBuffer,
+                ContentType: "image/png",
+              })
+              .promise();
+            posterUrl = buildS3FileUrl(posterKey);
+            posterUrls.push(posterUrl);
+          } catch (posterUploadErr: any) {
+            console.error("[uploadMulti] poster upload failed", {
+              key: posterKey,
+              error: posterUploadErr?.message || String(posterUploadErr),
+            });
+            if (isVideo) pendingPosterVideos.push(fileUrl);
+          }
+        } else if (isVideo) {
+          pendingPosterVideos.push(fileUrl);
+        }
 
-        results.push({
+        const entry: any = {
           filename,
           key,
           fileUrl,
           location: (uploaded && (uploaded as any).Location) || undefined,
           compressed,
-        });
+        };
+        if (posterUrl) entry.posterUrl = posterUrl;
+        results.push(entry);
       } catch (e: any) {
         console.error("file upload error", e);
         results.push({
@@ -548,6 +747,7 @@ export async function uploadMultiHandler(req: Request, res: Response) {
         if (existing) {
           const toAddImages: string[] = [];
           const toAddVideos: string[] = [];
+          const toAddPosters: string[] = [...posterUrls];
           for (const r of results) {
             if (r.fileUrl && !r.error) {
               if (
@@ -566,6 +766,24 @@ export async function uploadMultiHandler(req: Request, res: Response) {
               }
             }
           }
+          if (pendingPosterVideos.length) {
+            try {
+              const posters = await ensureVideoPosters(
+                pendingPosterVideos,
+                (existing && Array.isArray(existing.video_posters)
+                  ? existing.video_posters
+                  : []) as string[]
+              );
+              for (const poster of posters) {
+                if (!toAddPosters.includes(poster)) toAddPosters.push(poster);
+              }
+            } catch (posterErr: any) {
+              console.error("[uploadMulti] fallback poster generation failed", {
+                homeworkId,
+                error: posterErr?.message || String(posterErr),
+              });
+            }
+          }
           const patch: any = {};
           if (toAddImages.length) {
             patch.images = Array.isArray(existing.images)
@@ -577,27 +795,14 @@ export async function uploadMultiHandler(req: Request, res: Response) {
               ? [...existing.videos, ...toAddVideos]
               : toAddVideos;
           }
-          if (toAddVideos.length) {
-            const posterCandidates =
-              existing && Array.isArray(existing.videos)
-                ? [...existing.videos, ...toAddVideos]
-                : [...toAddVideos];
-            try {
-              const posters = await ensureVideoPosters(
-                posterCandidates,
-                (existing && Array.isArray(existing.video_posters)
-                  ? existing.video_posters
-                  : []) as string[]
-              );
-              if (posters.length > 0) {
-                patch.video_posters = posters;
-              }
-            } catch (posterErr: any) {
-              console.error("[uploadMulti] poster generation failed", {
-                homeworkId,
-                error: posterErr?.message || String(posterErr),
-              });
-            }
+          if (toAddPosters.length) {
+            const existingPosters = Array.isArray(existing.video_posters)
+              ? existing.video_posters
+              : [];
+            const merged = Array.from(
+              new Set([...existingPosters, ...toAddPosters])
+            );
+            patch.video_posters = merged;
           }
           if (Object.keys(patch).length) {
             await hwModel.updateHomework(homeworkId, patch);
