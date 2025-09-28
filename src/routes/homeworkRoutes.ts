@@ -5,6 +5,12 @@ import { authMiddleware, requireRole } from "../middleware/auth.js";
 const router = express.Router();
 
 router.get("/", authMiddleware, ctrl.list);
+router.get(
+  "/admin/all",
+  authMiddleware,
+  requireRole("Admin", "Employee"),
+  ctrl.listAllForAdmin
+);
 router.get("/person/:person", ctrl.listByPerson);
 router.get("/group/:group", ctrl.listByGroup);
 router.get("/school/:school", ctrl.listBySchool);

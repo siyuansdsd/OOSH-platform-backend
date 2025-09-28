@@ -235,6 +235,24 @@ export async function listWithUrls(req: Request, res: Response) {
   res.json(sanitizeHomeworkList(rows));
 }
 
+export async function listAllForAdmin(req: Request, res: Response) {
+  try {
+    const max = 3000;
+    const rows = await hw.listAllHomeworks(max);
+    const items = sanitizeHomeworkList(rows);
+    res.json({
+      items,
+      total: items.length,
+      limit: max,
+    });
+  } catch (err: any) {
+    console.error("[listAllForAdmin] failed", {
+      error: err?.message || String(err),
+    });
+    res.status(500).json({ error: "failed to list homeworks" });
+  }
+}
+
 export async function update(req: Request, res: Response) {
   const id = req.params.id;
   if (!id) return res.status(400).json({ error: "id required" });
