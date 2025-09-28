@@ -84,7 +84,7 @@ function extractPosterFrame(inputPath: string, outputPath: string) {
     "1",
     outputPath,
   ];
-  const timeoutMs = Number(process.env.POSTER_FFMPEG_TIMEOUT || "5000");
+  const timeoutMs = Number(process.env.POSTER_FFMPEG_TIMEOUT || "12000");
   const r = spawnSync(FFMPEG_PATH, args, {
     stdio: "ignore",
     timeout: timeoutMs,
