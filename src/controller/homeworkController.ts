@@ -87,14 +87,14 @@ export async function list(req: Request, res: Response) {
   const type = (req.query.type as string) || "all"; // media | website | all
 
   const SCHOOL_FETCH_LIMIT = 1000;
-  const GLOBAL_FETCH_LIMIT = 1000;
   let rows: any[] = [];
   try {
     if (school) {
       // pull a wider set when scoping to a school so search covers all matches
       rows = await hw.listHomeworksBySchool(school, SCHOOL_FETCH_LIMIT);
     } else {
-      rows = await hw.listAllHomeworks(GLOBAL_FETCH_LIMIT);
+      const baseLimit = name ? 1000 : Math.min(1000, page * pageSize + 1);
+      rows = await hw.listAllHomeworks(baseLimit);
     }
   } catch (err: any) {
     return res.status(500).json({ error: "failed to list homeworks" });
@@ -139,12 +139,28 @@ export async function list(req: Request, res: Response) {
 
   const total = filtered.length;
 
+  if (school || name) {
+    res.json({
+      items: filtered,
+      total,
+      page: 1,
+      pageSize: total,
+      hasMore: false,
+    });
+    return;
+  }
+
+  const start = (page - 1) * pageSize;
+  const end = start + pageSize;
+  const items = filtered.slice(start, end);
+  const hasMore = filtered.length > page * pageSize;
+
   res.json({
-    items: filtered,
+    items,
     total,
-    page: 1,
-    pageSize: total,
-    hasMore: false,
+    page,
+    pageSize,
+    hasMore,
   });
 }
 
