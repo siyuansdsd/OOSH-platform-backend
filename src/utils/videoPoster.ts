@@ -109,7 +109,7 @@ async function uploadPoster(bucket: string, key: string, filePath: string) {
 
 async function ensurePosterForUrl(url: string): Promise<string | null> {
   const parsed = parseS3Url(url);
-  if (!parsed) return;
+  if (!parsed) return null;
 
   const { bucket, key } = parsed;
   const posterKey = buildPosterKey(key);
