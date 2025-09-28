@@ -69,22 +69,20 @@ export async function create(req: Request, res: Response) {
   try {
     let created = await hw.createHomework(item);
     if (Array.isArray(created?.videos) && created.videos.length > 0) {
-      void (async () => {
-        try {
-          const posters = await ensureVideoPosters(
-            created.videos,
-            created.video_posters || []
-          );
-          if (posters.length > 0) {
-            await hw.updateHomework(id, { video_posters: posters });
-          }
-        } catch (posterErr: any) {
-          console.error("[create] poster generation failed", {
-            id,
-            error: posterErr?.message || String(posterErr),
-          });
+      try {
+        const posters = await ensureVideoPosters(
+          created.videos,
+          created.video_posters || []
+        );
+        if (posters.length > 0) {
+          await hw.updateHomework(id, { video_posters: posters });
         }
-      })();
+      } catch (posterErr: any) {
+        console.error("[create] poster generation failed", {
+          id,
+          error: posterErr?.message || String(posterErr),
+        });
+      }
     }
     res.status(201).json(sanitizeHomeworkRecord(created));
   } catch (err: any) {
@@ -251,33 +249,33 @@ export async function update(req: Request, res: Response) {
     let updated = await hw.updateHomework(id, patch as any);
     if (!updated) return res.status(404).json({ error: "not found" });
     if (Array.isArray(updated?.videos) && updated.videos.length > 0) {
-      void (async () => {
-        try {
-          const posters = await ensureVideoPosters(
-            updated.videos,
-            updated.video_posters || []
-          );
-          if (posters.length > 0) {
-            await hw.updateHomework(id, { video_posters: posters });
-          }
-        } catch (posterErr: any) {
-          console.error("[update] poster generation failed", {
-            id,
-            error: posterErr?.message || String(posterErr),
-          });
+      try {
+        const posters = await ensureVideoPosters(
+          updated.videos,
+          updated.video_posters || []
+        );
+        if (posters.length > 0) {
+          await hw.updateHomework(id, { video_posters: posters });
         }
-      })();
+      } catch (posterErr: any) {
+        console.error("[update] poster generation failed", {
+          id,
+          error: posterErr?.message || String(posterErr),
+        });
+      }
     } else if (
       (!updated?.videos || updated.videos.length === 0) &&
       Array.isArray(updated?.video_posters) &&
       updated.video_posters.length > 0
     ) {
-      void hw.updateHomework(id, { video_posters: [] }).catch((posterErr: any) =>
+      try {
+        await hw.updateHomework(id, { video_posters: [] });
+      } catch (posterErr: any) {
         console.error("[update] poster reset failed", {
           id,
           error: posterErr?.message || String(posterErr),
-        })
-      );
+        });
+      }
     }
     res.json(sanitizeHomeworkRecord(updated));
   } catch (err: any) {
