@@ -84,15 +84,27 @@ function extractPosterFrame(inputPath: string, outputPath: string) {
     "1",
     outputPath,
   ];
-  const r = spawnSync(FFMPEG_PATH, args, { stdio: "ignore" });
+  const timeoutMs = Number(process.env.POSTER_FFMPEG_TIMEOUT || "5000");
+  const r = spawnSync(FFMPEG_PATH, args, {
+    stdio: "ignore",
+    timeout: timeoutMs,
+  });
+  if (r.error) {
+    console.error("[videoPoster] ffmpeg spawn error", {
+      error: r.error?.message || String(r.error),
+    });
+    return false;
+  }
   if (r.status !== 0) {
     console.error("[videoPoster] ffmpeg exited with error", {
       status: r.status,
       signal: r.signal,
+      stdout: r.stdout?.toString?.(),
       stderr: r.stderr?.toString?.(),
     });
-    throw new Error(`ffmpeg exited with status ${r.status}`);
+    return false;
   }
+  return true;
 }
 
 async function uploadPoster(bucket: string, key: string, filePath: string) {
@@ -127,7 +139,14 @@ async function ensurePosterForUrl(url: string): Promise<string | null> {
 
   try {
     await downloadToFile(bucket, key, videoPath);
-    extractPosterFrame(videoPath, posterPath);
+    const ok = extractPosterFrame(videoPath, posterPath);
+    if (!ok) {
+      console.warn("[videoPoster] skipping upload due to ffmpeg failure", {
+        url,
+      });
+      return null;
+    }
+
     await uploadPoster(bucket, posterKey, posterPath);
     console.info("[videoPoster] poster generated", {
       url,
