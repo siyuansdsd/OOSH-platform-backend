@@ -5,9 +5,11 @@ import fs from "fs";
 import path from "path";
 import { spawnSync } from "child_process";
 import { ensureVideoPosters } from "../utils/videoPoster.js";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
 const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-southeast-1" });
 const BUCKET = process.env.S3_BUCKET || "";
+const FFMPEG_PATH = ffmpegInstaller.path;
 
 function slugify(input: string) {
   return (input || "unknown")
@@ -338,12 +340,7 @@ async function compressImageBuffer(buffer: Buffer, contentType?: string) {
 }
 
 function hasFfmpeg() {
-  try {
-    const r = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" });
-    return r.status === 0 || r.status === null || r.error == null;
-  } catch (e) {
-    return false;
-  }
+  return !!FFMPEG_PATH;
 }
 
 async function compressVideoBufferToMp4(inputBuffer: Buffer): Promise<Buffer> {
@@ -373,7 +370,10 @@ async function compressVideoBufferToMp4(inputBuffer: Buffer): Promise<Buffer> {
       "+faststart",
       outPath,
     ];
-    const r = spawnSync("ffmpeg", args, { stdio: "inherit", timeout: 120000 });
+    const r = spawnSync(FFMPEG_PATH, args, {
+      stdio: "inherit",
+      timeout: 120000,
+    });
     if (r.status !== 0) {
       throw new Error(`ffmpeg failed with code ${r.status}`);
     }

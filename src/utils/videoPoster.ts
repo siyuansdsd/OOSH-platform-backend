@@ -2,25 +2,12 @@ import AWS from "aws-sdk";
 import fs from "fs";
 import path from "path";
 import { spawnSync } from "child_process";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+
+const FFMPEG_PATH = ffmpegInstaller.path;
 
 const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-southeast-2" });
 const TMP_DIR = "/tmp";
-
-let ffmpegChecked = false;
-let ffmpegAvailable = false;
-
-function hasFfmpeg() {
-  if (!ffmpegChecked) {
-    try {
-      const r = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" });
-      ffmpegAvailable = r.status === 0;
-    } catch (err) {
-      ffmpegAvailable = false;
-    }
-    ffmpegChecked = true;
-  }
-  return ffmpegAvailable;
-}
 
 type S3Location = { bucket: string; key: string };
 
@@ -89,7 +76,7 @@ function extractPosterFrame(inputPath: string, outputPath: string) {
     "1",
     outputPath,
   ];
-  const r = spawnSync("ffmpeg", args, { stdio: "ignore" });
+  const r = spawnSync(FFMPEG_PATH, args, { stdio: "ignore" });
   if (r.status !== 0) {
     throw new Error(`ffmpeg exited with status ${r.status}`);
   }
@@ -115,8 +102,8 @@ async function ensurePosterForUrl(url: string): Promise<string | null> {
   const posterKey = buildPosterKey(key);
   const posterUrl = buildPosterUrlFromVideoUrl(url);
 
-  if (!hasFfmpeg()) {
-    console.warn("[videoPoster] ffmpeg unavailable, skip poster generation");
+  if (!FFMPEG_PATH) {
+    console.warn("[videoPoster] ffmpeg path unavailable, skip poster generation");
     return null;
   }
 
