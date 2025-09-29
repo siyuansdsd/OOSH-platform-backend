@@ -280,9 +280,6 @@ export async function hubspotContactLogin(req: Request, res: Response) {
     `/crm/v3/objects/contacts/${encodeURIComponent(contactId)}`,
     baseUrl
   );
-  url.searchParams.append("properties", "email");
-  url.searchParams.append("properties", "firstname");
-  url.searchParams.append("properties", "lastname");
 
   console.info("[hubspotContactLogin] fetching contact", {
     contactId,
