@@ -565,10 +565,30 @@ export async function updateSelf(req: Request, res: Response) {
 }
 
 export async function list(req: Request, res: Response) {
-  const users = await userModel.listUsers(1000);
-  // strip password_hash
-  const out = users.map((u: any) => ({ ...u, password_hash: undefined }));
-  res.json(out);
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSizeRaw =
+    req.query.pageSize || req.query.per_page || req.query.limit;
+  const pageSize = Number(pageSizeRaw) || 12;
+
+  const fetchLimit = Math.min(1000, page * pageSize + 1);
+  const users = await userModel.listUsers(fetchLimit);
+
+  const sanitized = users
+    .map((u: any) => ({ ...u, password_hash: undefined }))
+    .sort((a: any, b: any) => {
+      const A = a.created_at || "";
+      const B = b.created_at || "";
+      if (A === B) return 0;
+      return A < B ? 1 : -1;
+    });
+
+  const total = sanitized.length;
+  const start = (page - 1) * pageSize;
+  const end = start + pageSize;
+  const items = sanitized.slice(start, end);
+  const hasMore = total > page * pageSize;
+
+  res.json({ items, total, page, pageSize, hasMore });
 }
 
 export async function getOne(req: Request, res: Response) {
