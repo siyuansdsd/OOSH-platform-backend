@@ -253,17 +253,25 @@ export async function adminLogin(req: Request, res: Response) {
 export async function hubspotContactLogin(req: Request, res: Response) {
   const contactId = String(req.body?.contactId || "").trim();
   if (!contactId) {
+    console.warn("[hubspotContactLogin] missing contactId", {
+      bodyKeys: Object.keys(req.body || {}),
+    });
     return res.status(400).json({ error: "contactId required" });
   }
 
   const hubspotToken =
     process.env.HUBSPOT_PRIVATE_APP_TOKEN || process.env.HUBSPOT_ACCESS_TOKEN;
   if (!hubspotToken) {
+    console.error("[hubspotContactLogin] hubspot token not configured", {
+      hasPrivateToken: !!process.env.HUBSPOT_PRIVATE_APP_TOKEN,
+      hasAccessToken: !!process.env.HUBSPOT_ACCESS_TOKEN,
+    });
     return res.status(500).json({ error: "hubspot token not configured" });
   }
 
   const fetchImpl: FetchLike | undefined = (globalThis as any).fetch;
   if (typeof fetchImpl !== "function") {
+    console.error("[hubspotContactLogin] fetch api unavailable");
     return res.status(500).json({ error: "fetch api unavailable" });
   }
 
@@ -276,6 +284,12 @@ export async function hubspotContactLogin(req: Request, res: Response) {
   url.searchParams.append("properties", "firstname");
   url.searchParams.append("properties", "lastname");
 
+  console.info("[hubspotContactLogin] fetching contact", {
+    contactId,
+    baseUrl,
+    requestUrl: url.toString(),
+  });
+
   let contactData: HubspotContactResponse;
   try {
     const response = await fetchImpl(url.toString(), {
@@ -285,12 +299,24 @@ export async function hubspotContactLogin(req: Request, res: Response) {
       },
     });
 
+    console.info("[hubspotContactLogin] hubspot response", {
+      contactId,
+      status: response.status,
+      ok: response.ok,
+    });
+
     if (response.status === 404) {
+      console.info("[hubspotContactLogin] contact not found", { contactId });
       return res.status(404).json({ error: "contact not found" });
     }
 
     if (!response.ok) {
       const hint = await response.text().catch(() => "");
+      console.error("[hubspotContactLogin] hubspot non-200", {
+        contactId,
+        status: response.status,
+        hint: hint.slice(0, 200),
+      });
       return res.status(502).json({
         error: "hubspot_error",
         status: response.status,
@@ -300,6 +326,11 @@ export async function hubspotContactLogin(req: Request, res: Response) {
 
     contactData = (await response.json()) as HubspotContactResponse;
   } catch (err: any) {
+    console.error("[hubspotContactLogin] hubspot request failed", {
+      contactId,
+      error: err?.message || String(err),
+      stack: err?.stack,
+    });
     return res.status(502).json({
       error: "hubspot_request_failed",
       message: err?.message || String(err),
@@ -307,17 +338,40 @@ export async function hubspotContactLogin(req: Request, res: Response) {
   }
 
   if (!contactData || contactData.archived) {
+    console.info("[hubspotContactLogin] contact archived or missing", {
+      contactId,
+      archived: contactData?.archived ?? null,
+    });
     return res.status(404).json({ error: "contact not available" });
   }
 
+  const maskEmail = (value?: string | null) => {
+    if (!value) return value;
+    const atIndex = value.indexOf("@");
+    const local = atIndex > 0 ? value.slice(0, atIndex) : value;
+    const domain = atIndex > 0 ? value.slice(atIndex + 1) : "";
+    const visible = local.slice(0, Math.min(local.length, 2));
+    return domain ? `${visible}***@${domain}` : `${visible}***`;
+  };
+
   const email = contactData.properties?.email?.trim();
   if (!email) {
+    console.warn("[hubspotContactLogin] contact email missing", {
+      contactId,
+    });
     return res.status(400).json({ error: "contact email missing" });
   }
 
   const firstname = contactData.properties?.firstname?.trim() || "";
   const lastname = contactData.properties?.lastname?.trim() || "";
   const displayName = [firstname, lastname].filter(Boolean).join(" ") || email;
+
+  console.info("[hubspotContactLogin] contact resolved", {
+    contactId,
+    email: maskEmail(email),
+    hasFirst: !!firstname,
+    hasLast: !!lastname,
+  });
 
   let user = await userModel.getUserByEmail(email);
 
@@ -326,8 +380,20 @@ export async function hubspotContactLogin(req: Request, res: Response) {
     let candidate = baseUsername;
     let suffix = 1;
     while (await userModel.getUserByUsername(candidate)) {
+      console.debug("[hubspotContactLogin] username collision", {
+        contactId,
+        email: maskEmail(email),
+        attempted: candidate,
+        nextSuffix: suffix,
+      });
       candidate = `${baseUsername}-${suffix++}`;
     }
+
+    console.info("[hubspotContactLogin] creating new user", {
+      contactId,
+      email: maskEmail(email),
+      username: candidate,
+    });
 
     user = await userModel.createUser({
       username: candidate,
@@ -337,6 +403,11 @@ export async function hubspotContactLogin(req: Request, res: Response) {
     });
   } else {
     if (user.blocked) {
+      console.warn("[hubspotContactLogin] blocked user", {
+        contactId,
+        userId: user.id,
+        email: maskEmail(user.email || undefined),
+      });
       return res.status(403).json({ error: "account blocked" });
     }
 
@@ -348,12 +419,28 @@ export async function hubspotContactLogin(req: Request, res: Response) {
       patch.role = "User";
     }
     if (Object.keys(patch).length > 0) {
+      console.info("[hubspotContactLogin] updating existing user", {
+        contactId,
+        userId: user.id,
+        fields: Object.keys(patch),
+      });
       const updated = await userModel.updateUser(user.id, patch);
       if (updated) {
         user = updated;
       }
+    } else {
+      console.debug("[hubspotContactLogin] no updates required", {
+        contactId,
+        userId: user.id,
+      });
     }
   }
+
+  console.info("[hubspotContactLogin] issuing tokens", {
+    contactId,
+    userId: user.id,
+    role: user.role,
+  });
 
   return issueTokensForUser(user as any, "default", res);
 }
