@@ -230,27 +230,9 @@ export async function listWithVideos(req: Request, res: Response) {
 }
 
 export async function listWithUrls(req: Request, res: Response) {
-  const page = Math.max(1, Number(req.query.page) || 1);
-  const pageSizeRaw = req.query.pageSize || req.query.limit;
-  const pageSize = Number(pageSizeRaw) || 12;
-
-  const baseLimit = Math.min(1000, page * pageSize + 1);
-  const rows = await hw.listHomeworksWithUrls(baseLimit);
-
-  rows.sort((a: any, b: any) => {
-    const A = a.created_at || "";
-    const B = b.created_at || "";
-    if (A === B) return 0;
-    return A < B ? 1 : -1;
-  });
-
-  const total = rows.length;
-  const start = (page - 1) * pageSize;
-  const end = start + pageSize;
-  const items = sanitizeHomeworkList(rows.slice(start, end));
-  const hasMore = total > page * pageSize;
-
-  res.json({ items, total, page, pageSize, hasMore });
+  const limit = Number(req.query.limit) || 100;
+  const rows = await hw.listHomeworksWithUrls(limit);
+  res.json(sanitizeHomeworkList(rows));
 }
 
 export async function listAllForAdmin(req: Request, res: Response) {
