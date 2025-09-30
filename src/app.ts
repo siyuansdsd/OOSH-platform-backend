@@ -1,4 +1,5 @@
 import express from "express";
+import { track } from "@vercel/analytics/server";
 import homeworkRoutes from "./routes/homeworkRoutes.js";
 import { initTable } from "./models/homework.js";
 import verificationRoutes from "./routes/verificationRoutes.js";
