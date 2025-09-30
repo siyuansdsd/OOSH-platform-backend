@@ -201,6 +201,11 @@ export async function getHomework(id: string) {
   }
 }
 
+export type HomeworkListPage = {
+  items: AWS.DynamoDB.DocumentClient.ItemList;
+  lastEvaluatedKey?: AWS.DynamoDB.DocumentClient.Key;
+};
+
 export async function listHomeworks(limit = 100) {
   // prefer the AllHomeworksIndex which lists by created_at
   return listAllHomeworks(limit);
@@ -248,18 +253,39 @@ export async function updateHomework(id: string, patch: Partial<Homework>) {
 }
 
 // Query helpers for GSIs / sparse indexes
+export async function listAllHomeworksPage(
+  limit = 100,
+  exclusiveStartKey?: AWS.DynamoDB.DocumentClient.Key
+): Promise<HomeworkListPage> {
+  const params: AWS.DynamoDB.DocumentClient.QueryInput = {
+    TableName: TABLE,
+    IndexName: "homework_index",
+    KeyConditionExpression: "entityType = :e",
+    ExpressionAttributeValues: { ":e": "HOMEWORK" },
+    ScanIndexForward: false,
+    Limit: limit,
+  };
+
+  if (exclusiveStartKey) {
+    params.ExclusiveStartKey = exclusiveStartKey;
+  }
+
+  const r = await ddb.query(params).promise();
+
+  const result: HomeworkListPage = {
+    items: r.Items || [],
+  };
+
+  if (r.LastEvaluatedKey) {
+    result.lastEvaluatedKey = r.LastEvaluatedKey;
+  }
+
+  return result;
+}
+
 export async function listAllHomeworks(limit = 100) {
-  const r = await ddb
-    .query({
-      TableName: TABLE,
-      IndexName: "homework_index",
-      KeyConditionExpression: "entityType = :e",
-      ExpressionAttributeValues: { ":e": "HOMEWORK" },
-      ScanIndexForward: false,
-      Limit: limit,
-    })
-    .promise();
-  return r.Items || [];
+  const { items } = await listAllHomeworksPage(limit);
+  return items;
 }
 
 export async function listHomeworksWithImages(limit = 100) {

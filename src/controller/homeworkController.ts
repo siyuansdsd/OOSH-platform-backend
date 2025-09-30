@@ -115,6 +115,87 @@ export async function list(req: Request, res: Response) {
   const name = (req.query.name as string) || undefined;
   const type = (req.query.type as string) || "all"; // media | website | all
 
+  const cursorParam =
+    typeof req.query.cursor === "string" ? req.query.cursor : undefined;
+
+  if (!school && !name && page > 1 && !cursorParam) {
+    return res.status(400).json({
+      error: "cursor required for pages beyond the first",
+    });
+  }
+
+  if (!school && !name) {
+    const decodeCursor = (value: string) => {
+      try {
+        const json = Buffer.from(value, "base64").toString("utf8");
+        return JSON.parse(json);
+      } catch (err) {
+        throw new Error("invalid cursor");
+      }
+    };
+
+    const encodeCursor = (key: any) =>
+      Buffer.from(JSON.stringify(key)).toString("base64");
+
+    let exclusiveStartKey: any;
+    if (cursorParam) {
+      try {
+        exclusiveStartKey = decodeCursor(cursorParam);
+      } catch (err: any) {
+        return res.status(400).json({ error: err.message || "invalid cursor" });
+      }
+    }
+
+    try {
+      const pageResult = await hw.listAllHomeworksPage(
+        Math.min(1000, pageSize),
+        exclusiveStartKey
+      );
+
+      let pageRows = pageResult.items || [];
+
+      if (type === "media") {
+        pageRows = pageRows.filter(
+          (r: any) => r.has_images || r.has_videos || r.has_urls
+        );
+      } else if (type === "website") {
+        pageRows = pageRows.filter(
+          (r: any) => r.urls && r.urls.length > 0
+        );
+      }
+
+      pageRows.sort((a: any, b: any) => {
+        const A = a.created_at || "";
+        const B = b.created_at || "";
+        if (A === B) return 0;
+        return A < B ? 1 : -1;
+      });
+
+      const items = sanitizeHomeworkList(pageRows);
+      const hasMore = !!pageResult.lastEvaluatedKey;
+      const nextCursor = hasMore
+        ? encodeCursor(pageResult.lastEvaluatedKey)
+        : null;
+      const approxTotal =
+        (page - 1) * pageSize + items.length + (hasMore ? 1 : 0);
+
+      res.json({
+        items,
+        total: approxTotal,
+        page,
+        pageSize,
+        hasMore,
+        nextCursor,
+      });
+      return;
+    } catch (err: any) {
+      console.error("[list] failed to list homeworks", {
+        error: err?.message || String(err),
+      });
+      return res.status(500).json({ error: "failed to list homeworks" });
+    }
+  }
+
   const SCHOOL_FETCH_LIMIT = 1000;
   let rows: any[] = [];
   try {
@@ -175,6 +256,7 @@ export async function list(req: Request, res: Response) {
       page: 1,
       pageSize: total,
       hasMore: false,
+      nextCursor: null,
     });
     return;
   }
@@ -190,6 +272,7 @@ export async function list(req: Request, res: Response) {
     page,
     pageSize,
     hasMore,
+    nextCursor: null,
   });
 }
 
