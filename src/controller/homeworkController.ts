@@ -18,53 +18,30 @@ export async function create(req: Request, res: Response) {
   const id = uuidv4();
   const payload = req.body;
   const now = new Date().toISOString();
-  const title = typeof payload.title === "string" ? payload.title.trim() : "";
-  const description =
-    typeof payload.description === "string" ? payload.description.trim() : "";
-  if (!title) return res.status(400).json({ error: "title required" });
-  if (!description)
-    return res.status(400).json({ error: "description required" });
-  // determine is_team: prefer explicit flag, otherwise infer from payload
-  let is_team: boolean | undefined = payload.is_team;
-  if (typeof is_team === "undefined") {
-    if (payload.person_name) is_team = false;
-    else if (Array.isArray(payload.members) && payload.members.length > 0)
-      is_team = true;
-    else is_team = true; // default to team if ambiguous
-  }
+  const normalizedIsTeam =
+    typeof payload.is_team === "boolean" ? payload.is_team : undefined;
 
   const item: any = {
     id,
-    is_team,
-    title,
-    description,
-    group_name: is_team ? payload.group_name : undefined,
-    person_name: !is_team ? payload.person_name : undefined,
+    is_team: normalizedIsTeam,
+    title:
+      typeof payload.title === "string" ? payload.title : undefined,
+    description:
+      typeof payload.description === "string" ? payload.description : undefined,
+    group_name:
+      typeof payload.group_name === "string" ? payload.group_name : undefined,
+    person_name:
+      typeof payload.person_name === "string" ? payload.person_name : undefined,
     school_name: payload.school_name,
-    members: is_team ? payload.members || [] : undefined,
+    members: Array.isArray(payload.members)
+      ? payload.members
+      : undefined,
     images: payload.images || [],
     videos: payload.videos || [],
     urls: payload.urls || [],
     video_posters: [],
     created_at: now,
   };
-
-  // basic request-level validation
-  if (item.is_team) {
-    if (!item.group_name)
-      return res
-        .status(400)
-        .json({ error: "group_name required for team homework" });
-    if (!Array.isArray(item.members) || item.members.length === 0)
-      return res
-        .status(400)
-        .json({ error: "members array required for team homework" });
-  } else {
-    if (!item.person_name)
-      return res
-        .status(400)
-        .json({ error: "person_name required for personal homework" });
-  }
 
   try {
     let created = await hw.createHomework(item);

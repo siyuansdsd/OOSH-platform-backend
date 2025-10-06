@@ -133,15 +133,9 @@ export async function createDraftAndPresign(req: Request, res: Response) {
 
   const { schoolName, groupName, is_team, person_name, members } = payload;
   const title =
-    typeof payload.title === "string" ? payload.title.trim() : "";
+    typeof payload.title === "string" ? payload.title : undefined;
   const description =
-    typeof payload.description === "string"
-      ? payload.description.trim()
-      : "";
-  if (!title)
-    return res.status(400).json({ error: "title required" });
-  if (!description)
-    return res.status(400).json({ error: "description required" });
+    typeof payload.description === "string" ? payload.description : undefined;
   if (!BUCKET)
     return res.status(500).json({ error: "S3_BUCKET not configured" });
 
@@ -151,12 +145,12 @@ export async function createDraftAndPresign(req: Request, res: Response) {
   const now = new Date().toISOString();
   const homework: any = {
     id,
-    is_team: typeof is_team === "boolean" ? is_team : !!members,
+    is_team: typeof is_team === "boolean" ? is_team : undefined,
     title,
     description,
     group_name: groupName,
     person_name: person_name,
-    members: members || [],
+    members: Array.isArray(members) ? members : undefined,
     school_name: schoolName,
     images: [],
     videos: [],

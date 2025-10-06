@@ -13,11 +13,9 @@ export type HomeworkSchool = (typeof ALLOWED_HOMEWORK_SCHOOLS)[number];
 
 export type Homework = {
   id: string; // uuid
-  // is_team: true => team homework (requires group_name + members)
-  // is_team: false => personal homework (requires person_name)
-  is_team: boolean;
-  title: string;
-  description: string;
+  is_team?: boolean;
+  title?: string;
+  description?: string;
   group_name?: string;
   person_name?: string;
   school_name: HomeworkSchool;
@@ -48,10 +46,6 @@ function validateRequiredFields(
 ) {
   const missing: string[] = [];
   if (!h.id) missing.push("id");
-  if (h.is_team === undefined) missing.push("is_team");
-  if (typeof h.title !== "string" || !h.title.trim()) missing.push("title");
-  if (typeof h.description !== "string" || !h.description.trim())
-    missing.push("description");
   if (!h.school_name) {
     missing.push("school_name");
   } else if (
@@ -63,18 +57,14 @@ function validateRequiredFields(
       )}`
     );
   }
-  // conditional: team requires group_name + members; personal requires person_name
-  if (h.is_team) {
-    if (!h.group_name) missing.push("group_name");
-    if (!h.members) missing.push("members");
-  } else {
-    if (!h.person_name) missing.push("person_name");
-  }
   if (!h.created_at) missing.push("created_at");
   if (missing.length) {
     throw new Error(`Missing required fields: ${missing.join(", ")}`);
   }
-  if (h.is_team && !Array.isArray(h.members)) {
+  if (h.is_team !== undefined && typeof h.is_team !== "boolean") {
+    throw new Error("is_team must be a boolean when provided");
+  }
+  if (h.members !== undefined && !Array.isArray(h.members)) {
     throw new Error("members must be an array of strings");
   }
   // validate optional media fields: if present they must be arrays
@@ -114,8 +104,14 @@ export async function createHomework(h: Homework) {
   const item = { ...h } as any;
   // validate required fields (images/videos/urls are optional)
   validateRequiredFields(item);
-  item.title = item.title.trim();
-  item.description = item.description.trim();
+  if (typeof item.title === "string") {
+    const trimmed = item.title.trim();
+    item.title = trimmed || undefined;
+  }
+  if (typeof item.description === "string") {
+    const trimmed = item.description.trim();
+    item.description = trimmed || undefined;
+  }
 
   // construct PK/SK and stable index fields
   item.PK = `HOMEWORK#${item.id}`;
@@ -144,8 +140,14 @@ export async function createHomeworkDraft(h: Homework) {
   const item = { ...h } as any;
   // validate required fields but allow empty media
   validateRequiredFields(item, { requireMedia: false });
-  item.title = item.title.trim();
-  item.description = item.description.trim();
+  if (typeof item.title === "string") {
+    const trimmed = item.title.trim();
+    item.title = trimmed || undefined;
+  }
+  if (typeof item.description === "string") {
+    const trimmed = item.description.trim();
+    item.description = trimmed || undefined;
+  }
 
   // construct PK/SK and stable index fields
   item.PK = `HOMEWORK#${item.id}`;
@@ -221,9 +223,14 @@ export async function updateHomework(id: string, patch: Partial<Homework>) {
   } catch (err) {
     throw err;
   }
-  if (typeof updated.title === "string") updated.title = updated.title.trim();
-  if (typeof updated.description === "string")
-    updated.description = updated.description.trim();
+  if (typeof updated.title === "string") {
+    const trimmed = updated.title.trim();
+    updated.title = trimmed || undefined;
+  }
+  if (typeof updated.description === "string") {
+    const trimmed = updated.description.trim();
+    updated.description = trimmed || undefined;
+  }
   // ensure PK/SK remain present
   updated.PK = `HOMEWORK#${updated.id}`;
   updated.SK = `META#${updated.created_at}`;
