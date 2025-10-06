@@ -6,12 +6,19 @@ import {
   deleteFiles,
 } from "../controller/uploadController.js";
 import { uploadMultiHandler } from "../controller/uploadController.js";
+import {
+  UPLOAD_MAX_FILES,
+  UPLOAD_SINGLE_FILE_MAX_BYTES,
+} from "../config/uploadLimits.js";
 import { authMiddleware, requireRole } from "../middleware/auth.js";
 
 const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: {
+    fileSize: UPLOAD_SINGLE_FILE_MAX_BYTES,
+    files: UPLOAD_MAX_FILES,
+  },
 });
 
 router.use(authMiddleware, requireRole("Admin", "Employee", "Temporary"));
@@ -23,7 +30,7 @@ const conditionalUpload = (req: any, res: any, next: any) => {
   const ct = String(req.headers["content-type"] || "");
   if (ct.startsWith("multipart/form-data")) {
     // use array middleware to accept multiple files under 'files'
-    return upload.array("files", 20)(req, res, next);
+    return upload.array("files", UPLOAD_MAX_FILES)(req, res, next);
   }
   return next();
 };
@@ -38,7 +45,11 @@ router.post("/create-and-presign", conditionalUpload, async (req, res) => {
 router.post("/upload", upload.single("file"), uploadHandler);
 
 // server-side multi-file upload with compression
-router.post("/upload-multi", upload.array("files", 20), uploadMultiHandler);
+router.post(
+  "/upload-multi",
+  upload.array("files", UPLOAD_MAX_FILES),
+  uploadMultiHandler
+);
 
 // delete files from S3 by URLs
 router.delete("/files", deleteFiles);

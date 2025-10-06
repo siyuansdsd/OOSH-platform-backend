@@ -6,11 +6,29 @@ import path from "path";
 import { spawnSync } from "child_process";
 import { ensureVideoPosters } from "../utils/videoPoster.js";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import {
+  UPLOAD_MAX_FILES,
+  UPLOAD_MAX_TOTAL_BYTES,
+  UPLOAD_SINGLE_FILE_MAX_BYTES,
+} from "../config/uploadLimits.js";
 
 const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-southeast-1" });
 const BUCKET = process.env.S3_BUCKET || "";
 const FFMPEG_PATH = ffmpegInstaller.path;
 const POSTER_TIMEOUT_MS = Number(process.env.POSTER_FFMPEG_TIMEOUT || "12000");
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const formatted = value % 1 === 0 ? value.toFixed(0) : value.toFixed(1);
+  return `${formatted} ${units[unitIndex]}`;
+}
 
 function slugify(input: string) {
   return (input || "unknown")
@@ -104,6 +122,14 @@ export async function createDraftAndPresign(req: Request, res: Response) {
   }
   if (filesInput.length === 0)
     return res.status(400).json({ error: "filename required" });
+  if (filesInput.length > UPLOAD_MAX_FILES) {
+    return res.status(400).json({
+      error: "too_many_files",
+      message: `maximum ${UPLOAD_MAX_FILES} files allowed per upload`,
+      limit: UPLOAD_MAX_FILES,
+      received: filesInput.length,
+    });
+  }
 
   const { schoolName, groupName, is_team, person_name, members } = payload;
   const title =
@@ -149,6 +175,42 @@ export async function createDraftAndPresign(req: Request, res: Response) {
   // If this request included multipart files (middleware attached), process them now
   const multipartFiles = (req.files as Express.Multer.File[] | undefined) || [];
   if (multipartFiles && multipartFiles.length > 0) {
+    if (multipartFiles.length > UPLOAD_MAX_FILES) {
+      return res.status(400).json({
+        error: "too_many_files",
+        message: `maximum ${UPLOAD_MAX_FILES} files allowed per upload`,
+        limit: UPLOAD_MAX_FILES,
+        received: multipartFiles.length,
+      });
+    }
+
+    const totalBytes = multipartFiles.reduce(
+      (sum, file) => sum + (file.size || 0),
+      0
+    );
+    if (totalBytes > UPLOAD_MAX_TOTAL_BYTES) {
+      return res.status(400).json({
+        error: "total_size_exceeded",
+        message: `total upload size exceeds ${formatBytes(UPLOAD_MAX_TOTAL_BYTES)}`,
+        limitBytes: UPLOAD_MAX_TOTAL_BYTES,
+        receivedBytes: totalBytes,
+      });
+    }
+
+    for (const file of multipartFiles) {
+      if ((file.size || 0) > UPLOAD_SINGLE_FILE_MAX_BYTES) {
+        return res.status(400).json({
+          error: "file_too_large",
+          message: `single file size cannot exceed ${formatBytes(
+            UPLOAD_SINGLE_FILE_MAX_BYTES
+          )}`,
+          limitBytes: UPLOAD_SINGLE_FILE_MAX_BYTES,
+          receivedBytes: file.size || 0,
+          filename: file.originalname,
+        });
+      }
+    }
+
     const results: Array<any> = [];
     const posterUrls: string[] = [];
     const pendingPosterVideos: string[] = [];
@@ -537,6 +599,16 @@ export async function uploadHandler(req: Request, res: Response) {
   const file = req.file as Express.Multer.File | undefined;
   const { homeworkId, filename, schoolName, groupName } = req.body || {};
   if (!file) return res.status(400).json({ error: "file required" });
+  if ((file.size || 0) > UPLOAD_SINGLE_FILE_MAX_BYTES) {
+    return res.status(400).json({
+      error: "file_too_large",
+      message: `single file size cannot exceed ${formatBytes(
+        UPLOAD_SINGLE_FILE_MAX_BYTES
+      )}`,
+      limitBytes: UPLOAD_SINGLE_FILE_MAX_BYTES,
+      receivedBytes: file.size || 0,
+    });
+  }
   if (!homeworkId || !filename)
     return res.status(400).json({ error: "homeworkId and filename required" });
   if (!BUCKET)
@@ -624,8 +696,40 @@ export async function uploadMultiHandler(req: Request, res: Response) {
   const { homeworkId, schoolName, groupName } = req.body || {};
   if (!files || files.length === 0)
     return res.status(400).json({ error: "files required" });
+  if (files.length > UPLOAD_MAX_FILES) {
+    return res.status(400).json({
+      error: "too_many_files",
+      message: `maximum ${UPLOAD_MAX_FILES} files allowed per upload`,
+      limit: UPLOAD_MAX_FILES,
+      received: files.length,
+    });
+  }
   if (!BUCKET)
     return res.status(500).json({ error: "S3_BUCKET not configured" });
+
+  const totalBytes = files.reduce((sum, file) => sum + (file.size || 0), 0);
+  if (totalBytes > UPLOAD_MAX_TOTAL_BYTES) {
+    return res.status(400).json({
+      error: "total_size_exceeded",
+      message: `total upload size exceeds ${formatBytes(UPLOAD_MAX_TOTAL_BYTES)}`,
+      limitBytes: UPLOAD_MAX_TOTAL_BYTES,
+      receivedBytes: totalBytes,
+    });
+  }
+
+  for (const file of files) {
+    if ((file.size || 0) > UPLOAD_SINGLE_FILE_MAX_BYTES) {
+      return res.status(400).json({
+        error: "file_too_large",
+        message: `single file size cannot exceed ${formatBytes(
+          UPLOAD_SINGLE_FILE_MAX_BYTES
+        )}`,
+        limitBytes: UPLOAD_SINGLE_FILE_MAX_BYTES,
+        receivedBytes: file.size || 0,
+        filename: file.originalname,
+      });
+    }
+  }
 
   const results: Array<{
     filename: string;
