@@ -11,6 +11,7 @@ import {
   UPLOAD_MAX_TOTAL_BYTES,
   UPLOAD_SINGLE_FILE_MAX_BYTES,
 } from "../config/uploadLimits.js";
+import * as hw from "../models/homework.js";
 
 const s3 = new AWS.S3({ region: process.env.AWS_REGION || "ap-southeast-1" });
 const BUCKET = process.env.S3_BUCKET || "";
@@ -70,6 +71,25 @@ function buildPosterKeyFromVideoKey(key: string) {
 
 function buildS3FileUrl(key: string) {
   return `https://${BUCKET}.s3.${s3.config.region}.amazonaws.com/${key}`;
+}
+
+async function generateQrDataUrl(targetUrl: string) {
+  const qrUrl = new URL("https://api.qrserver.com/v1/create-qr-code/");
+  qrUrl.searchParams.set("size", "300x300");
+  qrUrl.searchParams.set("data", targetUrl);
+
+  const response = await fetch(qrUrl.toString());
+  if (!response.ok) {
+    const hint = await response.text().catch(() => "");
+    throw new Error(
+      `failed to generate qr code: ${response.status} ${hint.slice(0, 120)}`
+    );
+  }
+
+  const contentType = response.headers.get("content-type") || "image/png";
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const base64 = buffer.toString("base64");
+  return `data:${contentType};base64,${base64}`;
 }
 
 export async function presignHandler(req: Request, res: Response) {
@@ -918,6 +938,65 @@ export async function uploadMultiHandler(req: Request, res: Response) {
     return res
       .status(500)
       .json({ error: "upload failed", details: String(err) });
+  }
+}
+
+export async function uploadMcworldHandler(req: Request, res: Response) {
+  const file = (req.file as Express.Multer.File | undefined) || null;
+  const { homeworkId, schoolName, groupName } = req.body || {};
+  if (!file) return res.status(400).json({ error: "file required" });
+  if (!homeworkId) {
+    return res.status(400).json({ error: "homeworkId required" });
+  }
+  if (!/\.mcworld$/i.test(file.originalname || "")) {
+    return res.status(400).json({ error: "mcworld file required" });
+  }
+  if (!BUCKET)
+    return res.status(500).json({ error: "S3_BUCKET not configured" });
+
+  try {
+    const filename = file.originalname || `world-${Date.now()}.mcworld`;
+    const baseKey = makeKey({
+      schoolName,
+      groupName,
+      homeworkId,
+      filename,
+    });
+    const key = baseKey.endsWith(".mcworld")
+      ? baseKey
+      : `${baseKey}.mcworld`;
+
+    await s3
+      .upload({
+        Bucket: BUCKET,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype || "application/octet-stream",
+      })
+      .promise();
+
+    const fileUrl = buildS3FileUrl(key);
+    const qrImage = await generateQrDataUrl(fileUrl);
+
+    const existing = await hw.getHomework(homeworkId);
+    if (!existing) {
+      return res.status(404).json({ error: "homework not found" });
+    }
+
+    await hw.updateHomework(homeworkId, {
+      mcworld_url: fileUrl,
+      mcworld_qr_image: qrImage,
+    });
+
+    return res.json({
+      homeworkId,
+      fileUrl,
+      qrImage,
+      key,
+    });
+  } catch (err: any) {
+    console.error("uploadMcworldHandler error", err);
+    return res.status(500).json({ error: "mcworld upload failed" });
   }
 }
 

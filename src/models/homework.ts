@@ -20,6 +20,8 @@ export type Homework = {
   person_name?: string;
   school_name: HomeworkSchool;
   members?: string[];
+  mcworld_url?: string;
+  mcworld_qr_image?: string;
   images?: string[];
   videos?: string[];
   urls?: string[];

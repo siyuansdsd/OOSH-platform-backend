@@ -4,6 +4,7 @@ import {
   presignHandler,
   uploadHandler,
   deleteFiles,
+  uploadMcworldHandler,
 } from "../controller/uploadController.js";
 import { uploadMultiHandler } from "../controller/uploadController.js";
 import {
@@ -50,6 +51,8 @@ router.post(
   upload.array("files", UPLOAD_MAX_FILES),
   uploadMultiHandler
 );
+
+router.post("/upload-mcworld", upload.single("file"), uploadMcworldHandler);
 
 // delete files from S3 by URLs
 router.delete("/files", deleteFiles);
