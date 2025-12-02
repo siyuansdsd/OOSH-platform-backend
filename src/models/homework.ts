@@ -430,6 +430,8 @@ export async function deleteHomework(id: string) {
     collect(existing.videos);
     collect(existing.urls);
     collect((existing as any).video_posters);
+    const mcworldKey = extractS3Key(String(existing.mcworld_url || ""));
+    if (mcworldKey) keys.add(mcworldKey);
 
     // batch delete S3 objects if any
     if (keys.size > 0 && BUCKET) {
